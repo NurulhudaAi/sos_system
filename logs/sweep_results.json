@@ -1,0 +1,380 @@
+[
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 149.77
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 138.35
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 139.22
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 140.75
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 189.41
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 2,
+    "FN": 3,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.4,
+    "time_s": 125.08
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 188.48
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 144.65
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 144.19
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 148.46
+  },
+  {
+    "combo": {
+      "confirm_seconds": 6.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 146.78
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 147.52
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 147.39
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 145.6
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 149.33
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 147.14
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 157.75
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 164.95
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 160.18
+  },
+  {
+    "combo": {
+      "confirm_seconds": 9.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 181.82
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 207.92
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.1,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 199.95
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 149.25
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.18,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 171.19
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.01
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 198.97
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.02
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 188.86
+  },
+  {
+    "combo": {
+      "confirm_seconds": 12.0,
+      "spike_thresh_norm": 0.25,
+      "motion_thresh_norm": 0.03
+    },
+    "TP": 1,
+    "FN": 4,
+    "FP": 0,
+    "TN": 2,
+    "precision": 1.0,
+    "recall": 0.2,
+    "time_s": 189.97
+  }
+]

@@ -1,0 +1,1 @@
+2026-04-28T15:33:53.072666 | fall | {'track_id': 1, 'source': '/tmp/test.mp4', 'recovered_quickly': True, 'fall_result': {'is_fallen': True, 'recovered_quickly': True, 'time_lying': 1}} | stumble_fall_20260428_153353_064535.jpg

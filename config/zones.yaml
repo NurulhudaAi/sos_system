@@ -1,0 +1,8 @@
+cameras:
+  default:
+    zones:
+      - name: "full_frame"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
