@@ -2,11 +2,20 @@ import cv2, sys, time, yaml, torch, subprocess, platform, socket, requests, io
 from pathlib import Path
 from collections import defaultdict, deque
 import numpy as np
+
+# MUST BE FIRST: Initialize environment before other imports
+from config.env_manager import init_env
+if not init_env(require_edit=False):
+    print("❌ Environment initialization failed. Exiting.")
+    sys.exit(1)
+
 from ultralytics import YOLO
 from detectors.fall_detector import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
 from pipeline  import CooldownEngine, ZoneManager, AlertDispatcher
 from utils     import preprocess, Visualizer
+from help_request_dispatcher import HelpRequestDispatcher
+import database
 
 cfg  = yaml.safe_load(Path("config/thresholds.yaml").read_text())
 # streaming config (lightweight trigger)
@@ -139,7 +148,15 @@ alert_cds = {
 }
 # enforce single alert per local file (config.general.one_alert_per_file, default True)
 enforce_one = cfg.get('general',{}).get('one_alert_per_file', True)
-disp     = AlertDispatcher(cooldowns=alert_cds, default_cooldown=alert_default, enforce_one_per_file=enforce_one)
+
+# Initialize help dispatcher
+help_disp = HelpRequestDispatcher(
+    webhook_url="",  # Loaded from .env via HelpRequestDispatcher.__init__
+    timeout=5,
+    db=database
+)
+
+disp     = AlertDispatcher(cooldowns=alert_cds, default_cooldown=alert_default, enforce_one_per_file=enforce_one, help_dispatcher=help_disp)
 viz      = Visualizer()
 cds      = defaultdict(lambda:{
     "fall_warning": CooldownEngine("fall_warning", cfg.get("fall_warning", cfg.get("fall",{}))),

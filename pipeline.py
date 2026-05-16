@@ -58,8 +58,9 @@ class AlertDispatcher:
         "fall_warning":"FALL WARNING",
     }
 
-    def __init__(self, webhook=None, cooldowns=None, default_cooldown=300, enforce_one_per_file=False, reset_file=None, reset_check_interval=1.0):
+    def __init__(self, webhook=None, cooldowns=None, default_cooldown=300, enforce_one_per_file=False, reset_file=None, reset_check_interval=1.0, help_dispatcher=None):
         self.webhook = webhook
+        self.help_dispatcher = help_dispatcher
         # per-event cooldown mapping (e.g., {'fall': 120, 'hand_sos': 60})
         self._cooldowns = cooldowns or {}
         self._default_cooldown = default_cooldown
@@ -324,4 +325,31 @@ class AlertDispatcher:
 
         self._log.warning(f"{label} | {extra or {{}}} | {path.name}")
         print(f"ALERT: {label} | {path.name}")
+
+        # Send help request if dispatcher configured and triggered
+        if self.help_dispatcher:
+            try:
+                level, level_name, flags = self._assess_alert_level(atype, extra)
+                if self.help_dispatcher.should_send_help_request(atype, level):
+                    import uuid
+                    event_uuid = str(uuid.uuid4())
+                    source_id = extra.get("source") if isinstance(extra, dict) else None
+                    track_id = extra.get("track_id") if isinstance(extra, dict) else None
+                    location = extra.get("location") if isinstance(extra, dict) else "unknown"
+                    self.help_dispatcher.dispatch_help_request(
+                        event_uuid=event_uuid,
+                        event_type=atype,
+                        severity=level,
+                        severity_name=level_name,
+                        location=location,
+                        source_id=source_id,
+                        track_id=track_id,
+                        image_path=str(path),
+                        frame=frame,
+                        extra=extra
+                    )
+            except Exception as e:
+                self._log.warning(f"Help request dispatch failed: {e}")
+                print(f"⚠️  Help request error: {e}")
+
         return True

@@ -9,3 +9,6 @@ torchvision>=0.15.0
 lap>=0.5.12
 fastapi>=0.95.0
 uvicorn>=0.22.0
+pymongo>=4.5.0
+python-dotenv>=1.0.0
+dnspython>=2.4.0
