@@ -68,16 +68,26 @@ class ItemWrap:
         return self
     def numpy(self):
         return np.array(self.val)
+    def item(self):
+        return self.numpy().item()
+    def __float__(self):
+        return float(self.item())
+    def __int__(self):
+        return int(self.item())
 
 class BoxesWrapper:
     def __init__(self, xyxy, confs, ids):
         self.xyxy = [ItemWrap(x) for x in xyxy]
         self.conf = [ItemWrap(c) for c in confs]
         self.id = [ItemWrap(i) for i in ids] if ids is not None else None
+    def __len__(self):
+        return len(self.xyxy)
 
 class KeypointsWrapper:
     def __init__(self, data):
         self.data = [ItemWrap(d) for d in data] if data else None
+    def __len__(self):
+        return len(self.data or [])
 
 class SimpleTracker:
     def __init__(self, iou_thresh=0.3, max_lost=5):
@@ -240,14 +250,12 @@ def main(src, port=8081, location=None):
                 ids = [d.get('track_id') for d in assigned]
                 boxes = BoxesWrapper(xyxy, confs, ids)
                 kpts = KeypointsWrapper([d.get('keypoints', []) for d in assigned])
-            else:
-                boxes = None
-                kpts = None
                 for i in range(len(boxes)):
                     bbox = boxes.xyxy[i].cpu().numpy().tolist()
+                    x1, y1, x2, y2 = bbox
                     conf = float(boxes.conf[i].cpu())
                     tid  = int(boxes.id[i].cpu()) if boxes.id is not None else i
-                    if kpts is None or i>=len(kpts.data): continue
+                    if kpts is None or not kpts.data or i>=len(kpts.data): continue
                     kp = kpts.data[i].cpu().numpy()
                     cx = (bbox[0]+bbox[2])/2/w
                     cy = (bbox[1]+bbox[3])/2/h
@@ -506,7 +514,7 @@ def run_source(src):
 
 if __name__=="__main__":
     # Load sources.yaml
-    sources = yaml.safe_load(Path("sources.yaml").read_text())["sources"]
+    sources = yaml.safe_load(Path("config/sources.yaml").read_text())["sources"]
     procs = []
     for src in sources:
         p = multiprocessing.Process(target=run_source, args=(src,))
