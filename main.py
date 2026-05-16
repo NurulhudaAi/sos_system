@@ -243,7 +243,9 @@ def main(src, port=8081, location=None):
             else:
                 boxes = None
                 kpts = None
-                for i in range(len(boxes)):
+
+            if boxes is not None:
+                for i in range(len(boxes.xyxy)):
                     bbox = boxes.xyxy[i].cpu().numpy().tolist()
                     conf = float(boxes.conf[i].cpu())
                     tid  = int(boxes.id[i].cpu()) if boxes.id is not None else i
