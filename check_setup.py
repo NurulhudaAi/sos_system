@@ -62,9 +62,11 @@ except ImportError as e:
 import subprocess
 import shutil
 import platform
+import os
 
 if platform.system() == "Darwin":
-    vlc_cmd = "/Applications/VLC.app/Contents/MacOS/VLC"
+    mac_vlc = "/Applications/VLC.app/Contents/MacOS/VLC"
+    vlc_cmd = mac_vlc if os.path.exists(mac_vlc) else shutil.which("vlc")
 else:
     vlc_cmd = shutil.which("vlc")
 
@@ -72,7 +74,7 @@ if vlc_cmd:
     try:
         r = subprocess.run([vlc_cmd, "--version"],
                            capture_output=True, text=True, timeout=5)
-        ver = r.stdout.split("\n")[0]
+        ver = r.stdout.splitlines()[0] if r.stdout else "VLC detected"
         print(f"VLC:        {ver} ✓")
     except Exception as e:
         print(f"VLC:        FAIL — {e}")
