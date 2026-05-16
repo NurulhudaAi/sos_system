@@ -74,7 +74,7 @@ if vlc_cmd:
     try:
         r = subprocess.run([vlc_cmd, "--version"],
                            capture_output=True, text=True, timeout=5)
-        ver = r.stdout.splitlines()[0] if r.stdout else "VLC detected"
+        ver = r.stdout.splitlines()[0] if r.stdout else "VLC found but version unavailable"
         print(f"VLC:        {ver} ✓")
     except Exception as e:
         print(f"VLC:        FAIL — {e}")
