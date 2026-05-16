@@ -77,7 +77,7 @@ if vlc_cmd:
     except Exception as e:
         print(f"VLC:        FAIL — {e}")
 else:
-    print("VLC:        FAIL — VLC not found in PATH")
+    print("VLC:        FAIL — VLC executable not found")
 
 print("\n" + "=" * 50)
 print("ถ้าทุกอย่างขึ้น ✓ พร้อมไปขั้นถัดไป")
