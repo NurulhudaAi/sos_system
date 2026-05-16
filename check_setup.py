@@ -59,15 +59,30 @@ except ImportError as e:
     print(f"PyYAML:     FAIL — {e}")
 
 # VLC command
-import subprocess, platform
-vlc_path = "/Applications/VLC.app/Contents/MacOS/VLC"
-try:
-    r = subprocess.run([vlc_path, "--version"],
-                       capture_output=True, text=True, timeout=5)
-    ver = r.stdout.split("\n")[0]
-    print(f"VLC:        {ver} ✓")
-except Exception as e:
-    print(f"VLC:        FAIL — {e}")
+import subprocess
+import shutil
+import platform
+import os
+
+if platform.system() == "Darwin":
+    mac_vlc = "/Applications/VLC.app/Contents/MacOS/VLC"
+    vlc_cmd = mac_vlc if os.path.exists(mac_vlc) else shutil.which("vlc")
+else:
+    vlc_cmd = shutil.which("vlc")
+
+if vlc_cmd:
+    try:
+        r = subprocess.run([vlc_cmd, "--version"],
+                           capture_output=True, text=True, timeout=5)
+        if r.stdout:
+            ver = r.stdout.splitlines()[0]
+            print(f"VLC:        {ver} ✓")
+        else:
+            print("VLC:        FAIL — VLC found but version output is empty")
+    except Exception as e:
+        print(f"VLC:        FAIL — {e}")
+else:
+    print("VLC:        FAIL — VLC executable not found")
 
 print("\n" + "=" * 50)
 print("ถ้าทุกอย่างขึ้น ✓ พร้อมไปขั้นถัดไป")
