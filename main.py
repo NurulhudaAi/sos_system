@@ -261,7 +261,7 @@ def main(src, port=8081, location=None):
                     # Fall warning: dispatch a warning-level alert earlier using fall_warning cooldown
                     try:
                         fw_cd = cd.get("fall_warning") if isinstance(cd, dict) else None
-                        is_down = bool(fr.get("is_down"))
+                        is_down = bool(fr.get("is_down") and not fr.get("recovered_quickly"))
                         if fw_cd and fw_cd.update(is_down):
                             warn_frame = raw.copy()
                             label_w = f"FALL WARNING {now_time} @ {source_location or 'unknown'}"
