@@ -7,14 +7,14 @@ general:
 fall:
   bbox_ratio_thresh: 1.3
   spine_angle_thresh: 55.0
-  warning_seconds: 2.0
-  confirm_seconds: 9.0
   critical_seconds: 30.0
   danger_min_seconds: 3.0
   danger_max_seconds: 120.0
   temporal_window: 10
   temporal_threshold: 0.40
   cooldown_seconds: 120
+  confirm_seconds: 4.0      # ลดจาก 9.0 — alert เร็วขึ้นหลังนอนบนพื้น  
+  warning_seconds: 2.0      # ใช้กับ fallback is_down ที่เพิ่มใหม่
   # velocity/history tuning (pixels/sec, seconds)
   history_len: 16
   # normalized thresholds: fractions of image height per second
@@ -22,6 +22,10 @@ fall:
   motion_thresh_norm: 0.02
   sustain_seconds: 1.0
   lying_angle_thresh: 40.0
+  # geometry fallback: catches clear lying posture even when keypoint jitter prevents low-motion confirmation
+  geometry_ratio_thresh: 1.8
+  geometry_angle_thresh: 25.0
+  geometry_confirm_seconds: 3.0
   danger_lying_seconds: 15.0
   recover_seconds: 5.0
 
@@ -83,4 +87,3 @@ danger:
 
 # Record only dangerous alerts (levels >= record_threshold_level)
 record_only_dangerous: false
-
