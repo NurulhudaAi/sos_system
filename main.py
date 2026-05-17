@@ -166,7 +166,7 @@ help_disp = HelpRequestDispatcher(
     db=database
 )
 
-disp     = AlertDispatcher(cooldowns=alert_cds, default_cooldown=alert_default, enforce_one_per_file=enforce_one, help_dispatcher=help_disp)
+disp     = AlertDispatcher(cooldowns=alert_cds, default_cooldown=alert_default, enforce_one_per_file=enforce_one, help_dispatcher=help_disp, db=database)
 viz      = Visualizer()
 cds      = defaultdict(lambda:{
     "fall_warning": CooldownEngine("fall_warning", cfg.get("fall_warning", cfg.get("fall",{}))),

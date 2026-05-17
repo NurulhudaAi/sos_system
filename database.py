@@ -1,8 +1,8 @@
 import os
 import logging
 from pymongo import MongoClient
-from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure
-from datetime import datetime, timedelta
+from pymongo.errors import ServerSelectionTimeoutError, ConnectionFailure, OperationFailure
+from datetime import UTC, datetime, timedelta
 from typing import Optional, List, Dict, Any
 import json
 
@@ -10,6 +10,35 @@ logger = logging.getLogger("database")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "sos_system")
+INCIDENTS_COLLECTION = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
+
+
+def _utcnow():
+    return datetime.now(UTC)
+
+
+def _incidents(db):
+    return db[INCIDENTS_COLLECTION]
+
+
+def _bson_safe(value):
+    try:
+        import numpy as np
+
+        if isinstance(value, np.integer):
+            return int(value)
+        if isinstance(value, np.floating):
+            return float(value)
+        if isinstance(value, np.ndarray):
+            return [_bson_safe(item) for item in value.tolist()]
+    except Exception:
+        pass
+
+    if isinstance(value, dict):
+        return {str(k): _bson_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_bson_safe(item) for item in value]
+    return value
 
 
 def _get_client() -> MongoClient:
@@ -22,34 +51,47 @@ def _get_client() -> MongoClient:
         connectTimeoutMS=10000,
         socketTimeoutMS=10000,
         maxPoolSize=50,
-        minPoolSize=10
+        minPoolSize=0
     )
     return client
 
 
 def _ensure_indexes():
     """Create required indexes on collections."""
+    def create_index(collection, keys, **kwargs):
+        try:
+            collection.create_index(keys, **kwargs)
+        except OperationFailure as e:
+            if getattr(e, "code", None) == 85:
+                logger.info(f"Skipping existing index with different options: {keys}")
+                return
+            raise
+
+    client = None
     try:
         client = _get_client()
         db = client[MONGODB_DB_NAME]
 
-        # sos_events indexes
-        db.sos_events.create_index("event_uuid", unique=True)
-        db.sos_events.create_index([("created_at", -1), ("acknowledged", 1), ("source_id", 1)])
-        db.sos_events.create_index([("created_at", 1)], expireAfterSeconds=2592000)  # 30-day TTL
+        # incident indexes
+        incidents = _incidents(db)
+        create_index(incidents, "event_uuid", unique=True, sparse=True)
+        create_index(incidents, [("created_at", -1), ("acknowledged", 1), ("source_id", 1)])
+        create_index(incidents, [("created_at", 1)], expireAfterSeconds=2592000)  # 30-day TTL
 
         # object_events indexes
-        db.object_events.create_index([("created_at", -1)])
-        db.object_events.create_index([("source_id", 1), ("created_at", -1)])
+        create_index(db.object_events, [("created_at", -1)])
+        create_index(db.object_events, [("source_id", 1), ("created_at", -1)])
 
         # help_requests indexes
-        db.help_requests.create_index("event_uuid")
-        db.help_requests.create_index([("status", 1), ("sent_at", -1)])
+        create_index(db.help_requests, "event_uuid")
+        create_index(db.help_requests, [("status", 1), ("sent_at", -1)])
 
         logger.info("✅ MongoDB indexes created/verified")
-        client.close()
     except Exception as e:
         logger.warning(f"⚠️  Could not create indexes: {e}")
+    finally:
+        if client:
+            client.close()
 
 
 def insert_sos_event(
@@ -71,27 +113,37 @@ def insert_sos_event(
         client = _get_client()
         db = client[MONGODB_DB_NAME]
 
+        now = _utcnow()
         doc = {
             "event_uuid": event_uuid,
-            "created_at": datetime.utcnow(),
+            "incident_uuid": event_uuid,
+            "incident_id": event_uuid,
+            "created_at": now,
+            "detected_at": now,
             "event_type": event_type,
+            "incident_type": event_type,
+            "detection_type": event_type,
             "severity": severity,
             "severity_name": severity_name,
             "source_id": source_id,
+            "camera_id": source_id,
             "source_path": source_path,
             "location": location,
             "track_id": track_id,
             "image_path": image_path,
+            "snapshot_path": image_path,
             "meta_path": meta_path,
-            "flags": flags or [],
-            "extra": extra or {},
+            "metadata_path": meta_path,
+            "flags": _bson_safe(flags or []),
+            "extra": _bson_safe(extra or {}),
+            "status": "PENDING",
             "acknowledged": 0,
             "resolved_at": None,
             "notes": ""
         }
 
-        result = db.sos_events.insert_one(doc)
-        logger.info(f"✅ Inserted SOS event: {event_uuid}")
+        result = _incidents(db).insert_one(doc)
+        logger.info(f"✅ Inserted incident: {event_uuid} -> {INCIDENTS_COLLECTION}")
         client.close()
         return event_uuid
 
@@ -120,7 +172,7 @@ def insert_object_event(
         db = client[MONGODB_DB_NAME]
 
         doc = {
-            "created_at": datetime.utcnow(),
+            "created_at": _utcnow(),
             "event_type": event_type,
             "track_id": track_id,
             "person_track_id": person_track_id,
@@ -131,7 +183,7 @@ def insert_object_event(
             "bbox": bbox or [],
             "image_path": image_path,
             "seconds_unattended": seconds_unattended,
-            "meta": meta or {},
+            "meta": _bson_safe(meta or {}),
             "alert_raised": alert_raised
         }
 
@@ -152,12 +204,16 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
         db = client[MONGODB_DB_NAME]
 
         # Try by event_uuid first
-        result = db.sos_events.update_one(
-            {"event_uuid": event_id},
+        incidents = _incidents(db)
+
+        # Try by UUID first
+        result = incidents.update_one(
+            {"$or": [{"event_uuid": event_id}, {"incident_uuid": event_id}, {"incident_id": event_id}]},
             {
                 "$set": {
                     "acknowledged": 1,
-                    "resolved_at": datetime.utcnow(),
+                    "status": "ACKNOWLEDGED",
+                    "resolved_at": _utcnow(),
                     "notes": notes
                 }
             }
@@ -167,12 +223,13 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
             # Try by ObjectId
             from bson import ObjectId
             try:
-                result = db.sos_events.update_one(
+                result = incidents.update_one(
                     {"_id": ObjectId(event_id)},
                     {
                         "$set": {
                             "acknowledged": 1,
-                            "resolved_at": datetime.utcnow(),
+                            "status": "ACKNOWLEDGED",
+                            "resolved_at": _utcnow(),
                             "notes": notes
                         }
                     }
@@ -197,7 +254,13 @@ def get_event_by_uuid(event_uuid: str) -> Optional[Dict]:
         client = _get_client()
         db = client[MONGODB_DB_NAME]
 
-        event = db.sos_events.find_one({"event_uuid": event_uuid})
+        event = _incidents(db).find_one({
+            "$or": [
+                {"event_uuid": event_uuid},
+                {"incident_uuid": event_uuid},
+                {"incident_id": event_uuid},
+            ]
+        })
         if event:
             # Convert ObjectId to string for JSON serialization
             event["_id"] = str(event["_id"])
@@ -215,14 +278,14 @@ def recent_events(limit: int = 50, unacked_only: bool = False, hours: int = 24) 
         client = _get_client()
         db = client[MONGODB_DB_NAME]
 
-        cutoff_time = datetime.utcnow() - timedelta(hours=hours)
+        cutoff_time = _utcnow() - timedelta(hours=hours)
         query = {"created_at": {"$gte": cutoff_time}}
 
         if unacked_only:
             query["acknowledged"] = 0
 
         events = list(
-            db.sos_events.find(query)
+            _incidents(db).find(query)
             .sort("created_at", -1)
             .limit(limit)
         )
@@ -248,11 +311,17 @@ def events_summary() -> Dict:
         # Count by event type
         type_counts = {}
         for event_type in ["fall", "hand_sos", "fall_warning"]:
-            count = db.sos_events.count_documents({"event_type": event_type})
+            count = _incidents(db).count_documents({
+                "$or": [
+                    {"event_type": event_type},
+                    {"incident_type": event_type},
+                    {"detection_type": event_type},
+                ]
+            })
             type_counts[event_type] = count
 
         # Unacknowledged count
-        unacked_count = db.sos_events.count_documents({"acknowledged": 0})
+        unacked_count = _incidents(db).count_documents({"acknowledged": 0})
 
         # Object events count
         object_count = db.object_events.count_documents({})
@@ -304,7 +373,7 @@ def insert_help_request(
             "event_uuid": event_uuid,
             "webhook_url": webhook_url,
             "status": status,
-            "sent_at": datetime.utcnow(),
+            "sent_at": _utcnow(),
             "response_code": response_code,
             "response_time_ms": response_time_ms,
             "error": error,

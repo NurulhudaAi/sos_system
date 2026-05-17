@@ -4,10 +4,19 @@
 import sys
 import os
 from pathlib import Path
+import re
 
 # Ensure env is loaded
 from config.env_manager import init_env
 init_env(require_edit=False)
+
+
+def mask_mongodb_uri(uri: str) -> str:
+    """Mask credentials in MongoDB URI for console output."""
+    if not uri:
+        return "(empty)"
+    masked = re.sub(r"(mongodb(?:\+srv)?://[^:/@]+:)[^@]+(@)", r"\1***\2", uri)
+    return masked if len(masked) <= 80 else masked[:77] + "..."
 
 def test_connection():
     """Test MongoDB connection and create collections/indexes."""
@@ -26,7 +35,7 @@ def test_connection():
         print("❌ MONGODB_URI not set in .env")
         return False
 
-    print(f"Testing connection to: {uri[:50]}...")
+    print(f"Testing connection to: {mask_mongodb_uri(uri)}")
     print(f"Database name: {db_name}")
 
     try:
@@ -61,19 +70,26 @@ def test_connection():
         database._ensure_indexes()
         print("✅ Indexes created/verified")
 
-        # Test insert
-        print("\n⏳ Testing insert operation...")
+        # Test app incident insert path
+        print("\n⏳ Testing cctv_incidents insert operation...")
         import uuid
-        test_event = {
-            "event_uuid": str(uuid.uuid4()),
-            "event_type": "test",
-            "created_at": __import__('datetime').datetime.utcnow(),
-        }
-        result = db.test_events.insert_one(test_event)
-        print(f"✅ Test insert successful (ID: {result.inserted_id})")
+        event_uuid = "setup-test-" + str(uuid.uuid4())
+        database.insert_sos_event(
+            event_uuid=event_uuid,
+            event_type="setup_test",
+            severity=0,
+            severity_name="LOG",
+            source_id="setup_mongodb",
+            location="setup",
+            extra={"setup_test": True},
+        )
+        inserted = database.get_event_by_uuid(event_uuid)
+        if not inserted:
+            raise RuntimeError("Inserted setup test incident was not found")
+        print(f"✅ Incident insert successful (UUID: {event_uuid})")
 
         # Cleanup
-        db.test_events.delete_one({"_id": result.inserted_id})
+        db[database.INCIDENTS_COLLECTION].delete_one({"event_uuid": event_uuid})
 
         client.close()
         return True
@@ -92,21 +108,22 @@ def test_connection():
 
 def show_setup_instructions():
     """Show MongoDB Atlas setup instructions."""
+    db_name = os.getenv("MONGODB_DB_NAME", "iam")
     print("\n" + "="*60)
     print("MongoDB Atlas Setup Instructions")
     print("="*60)
-    print("""
+    print(f"""
 1. Go to MongoDB Atlas (https://cloud.mongodb.com)
 2. Select your cluster
 3. Click "Connect" → "Connection String"
-4. Copy the connection string: mongodb+srv://cctv:PASSWORD@...
+4. Copy the connection string: mongodb+srv://USERNAME:PASSWORD@...
 
 5. Update .env file:
    MONGODB_URI=<paste-connection-string>
-   MONGODB_DB_NAME=cctv
+   MONGODB_DB_NAME={db_name}
 
 6. In MongoDB Atlas, verify:
-   - Database Access: User 'cctv' with correct password
+   - Database Access: USERNAME from MONGODB_URI exists with correct password
    - Network Access: Your IP is whitelisted
    - Collections: Should auto-create on first insert
 

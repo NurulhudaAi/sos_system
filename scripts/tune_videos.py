@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 import yaml, cv2, time, torch, sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from ultralytics import YOLO
 from detectors.fall_detector import FallDetector
 from utils import preprocess
 
-ROOT = Path(__file__).resolve().parents[1]
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 
 device = ("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -18,7 +22,7 @@ fall_d = FallDetector(cfg.get('fall',{}))
 SKIP = cfg.get('general',{}).get('frame_skip', 1)
 CONF = cfg.get('general',{}).get('person_conf', 0.30)
 
-sources = yaml.safe_load((ROOT/"sources.yaml").read_text()).get('sources', [])
+sources = yaml.safe_load((ROOT/"config/sources.yaml").read_text()).get('sources', [])
 
 results = []
 

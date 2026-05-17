@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-import yaml, cv2, time, torch, json
+import yaml, cv2, time, torch, json, sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 from ultralytics import YOLO
 from detectors.fall_detector import FallDetector
 from utils import preprocess
 
-ROOT = Path(__file__).resolve().parents[1]
 cfg_all = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 fall_cfg_base = cfg_all.get('fall', {})
 
@@ -18,7 +22,7 @@ yolo = YOLO(cfg_all.get('general',{}).get('yolo_model','../models/yolov8n-pose.p
 SKIP = cfg_all.get('general',{}).get('frame_skip', 1)
 CONF = cfg_all.get('general',{}).get('person_conf', 0.30)
 
-sources = yaml.safe_load((ROOT/"sources.yaml").read_text()).get('sources', [])
+sources = yaml.safe_load((ROOT/"config/sources.yaml").read_text()).get('sources', [])
 
 # parameter grid (moderate size)
 confirm_list = [6.0, 9.0, float(fall_cfg_base.get('confirm_seconds',12.0))]
