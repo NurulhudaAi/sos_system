@@ -89,7 +89,7 @@ def _create_indexes(db):
 
 # ─── Write: SOS Event ─────────────────────────────────────────────────────────
 
-def insert_sos_event(
+def insert_incident(
     event_uuid:    str,
     event_type:    str,
     severity:      int,

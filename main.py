@@ -1,549 +1,472 @@
-import cv2, sys, time, yaml, torch, subprocess, platform, socket, requests, io
+#!/usr/bin/env python3
+"""
+main_production.py — SOS + Object Guardian — Production v2
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Features:
+  • Fall detection  (FallDetector + streaming trigger)
+  • Silent SOS hand  (HandSOSDetector state-machine)
+  • Object left-behind / theft  (ObjectGuardian)
+  • VLCStreamManager  (cross-platform, health-checked)
+  • Structured JSONL logging per event
+  • MongoDB (Atlas) real-time incident storage  ← NEW
+"""
+import cv2, sys, time, yaml, torch, requests, os   # ← os ย้ายขึ้นบนสุด
 from pathlib import Path
 from collections import defaultdict, deque
-import numpy as np
+from datetime import datetime                        # ← เพิ่ม datetime
+import numpy as np, multiprocessing, logging
 
-# MUST BE FIRST: Initialize environment before other imports
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT))
+
+# ──── Initialize environment (MUST BE FIRST) ────────────────────────────────
 from config.env_manager import init_env
-if not init_env(require_edit=False):
+if not init_env(require_edit=True):
     print("❌ Environment initialization failed. Exiting.")
     sys.exit(1)
+# ────────────────────────────────────────────────────────────────────────────
 
-from ultralytics import YOLO
-from detectors.fall_detector import FallDetector
+import re
+
+def _safe_name(s: str) -> str:
+    """Sanitize a directory name while preserving Unicode (keeps Thai)."""
+    if not s:
+        return "unknown"
+    name = re.sub(r"[\\/\x00-\x1f]+", "_", str(s)).strip()
+    name = name.replace(" ", "_")
+    name = re.sub(r"_+", "_", name)
+    return name
+
+from detectors.fall_detector     import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
-from pipeline  import CooldownEngine, ZoneManager, AlertDispatcher
-from utils     import preprocess, Visualizer
-from help_request_dispatcher import HelpRequestDispatcher
-import database
+from detectors.object_guardian   import ObjectGuardian
+from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
+from help_request_dispatcher     import HelpRequestDispatcher
+from utils                       import preprocess, Visualizer
+from vlc_stream                  import VLCStreamManager
+from alert_logger                import alert_logger
+from database                    import _get_db, insert_incident  # ← NEW
 
-cfg  = yaml.safe_load(Path("config/thresholds.yaml").read_text())
-# streaming config (lightweight trigger)
-streaming_cfg = cfg.get('streaming', {})
-SAMPLING_FPS = streaming_cfg.get('fps', 10)
-ROLLING_WINDOW_FRAMES = streaming_cfg.get('rolling_window', 90)
-CONFIRMATION_WINDOW = streaming_cfg.get('confirmation_window', 30)
-TRIGGER_ANGLE_DELTA = streaming_cfg.get('trigger_angle_delta', 30)
-TRIGGER_FRAMES = streaming_cfg.get('trigger_frames', 5)
-LYING_ANGLE_THRESH = streaming_cfg.get('lying_angle_thresh', 45)
+cfg         = yaml.safe_load((ROOT / "config/thresholds.yaml").read_text())
+GEN         = cfg.get("general", {})
+STREAM_CFG  = cfg.get("streaming", {})
+SAMPLING_FPS= STREAM_CFG.get("fps", 10)
+ROLL_WIN    = STREAM_CFG.get("rolling_window", 90)
+CONF_WIN    = STREAM_CFG.get("confirmation_window", 30)
+TRIG_DELTA  = STREAM_CFG.get("trigger_angle_delta", 30)
+TRIG_FRAMES = STREAM_CFG.get("trigger_frames", 5)
+LYING_ANG   = STREAM_CFG.get("lying_angle_thresh", 45)
+W, H        = 1920, 1080
+SKIP        = GEN.get("frame_skip", 2)
+DET_URL     = GEN.get("detector_url", "http://127.0.0.1:8000")
+DEVICE      = ("mps" if torch.backends.mps.is_available() else
+               "cuda" if torch.cuda.is_available() else "cpu")
+print(f"[main] Device: {DEVICE}")
 
-W, H = 1920, 1080
-SKIP = cfg.get("general",{}).get("frame_skip", 2)
-CONF = cfg.get("general",{}).get("person_conf", 0.60)
 
-device = ("mps"  if torch.backends.mps.is_available() else
-          "cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}")
-
-def start_vlc(src, port=8081):
-    if src.startswith("http"):
-        return None, src
-    if port == 8081:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-    vlc = ("/Applications/VLC.app/Contents/MacOS/VLC"
-           if platform.system()=="Darwin" else "cvlc")
-    p = subprocess.Popen([
-        vlc, src,
-        f"--sout=#transcode{{vcodec=MJPG,vb=3000,vfilter=canvas{{width={W},height={H}}},fps={SAMPLING_FPS}}}"
-        f":http{{mux=mpjpeg,dst=:{port}/}}",
-        "--sout-keep","--loop",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    print(f"VLC PID={p.pid} — waiting 3s...")
-    time.sleep(3)
-    if p.poll() is not None:
-        raise RuntimeError(f"VLC exited while starting the local stream for: {src}")
-    print(f"VLC stream ready at http://127.0.0.1:{port}/")
-    return p, f"http://127.0.0.1:{port}/"
-
-# Detector server URL (model-server)
-DETECTOR_URL = cfg.get('general',{}).get('detector_url','http://127.0.0.1:9000')
-
-# Simple local tracker to assign persistent IDs when server returns per-frame detections
-class ItemWrap:
-    def __init__(self,val):
-        self.val = val
-    def cpu(self):
-        return self
-    def numpy(self):
-        return np.array(self.val)
-    def item(self):
-        return self.numpy().item()
+class _W:
+    def __init__(self,v): self.val=v
+    def cpu(self): return self
+    def numpy(self): return np.array(self.val)
     def __float__(self):
-        return float(self.item())
-    def __int__(self):
-        return int(self.item())
+        try: return float(self.val)
+        except Exception: return float(np.array(self.val))
+    def __int__(self): return int(self.__float__())
+    def __repr__(self): return f"_W({self.val!r})"
 
 class BoxesWrapper:
-    def __init__(self, xyxy, confs, ids):
-        self.xyxy = [ItemWrap(x) for x in xyxy]
-        self.conf = [ItemWrap(c) for c in confs]
-        self.id = [ItemWrap(i) for i in ids] if ids is not None else None
-    def __len__(self):
-        return len(self.xyxy)
+    def __init__(self,xyxy,confs,ids):
+        self.xyxy=[_W(x) for x in xyxy]; self.conf=[_W(c) for c in confs]
+        self.id=[_W(i) for i in ids] if ids else None
 
 class KeypointsWrapper:
-    def __init__(self, data):
-        self.data = [ItemWrap(d) for d in data] if data else None
-    def __len__(self):
-        return len(self.data or [])
+    def __init__(self,data): self.data=[_W(d) for d in data] if data else None
 
 class SimpleTracker:
-    def __init__(self, iou_thresh=0.3, max_lost=5):
-        self.iou_thresh = iou_thresh
-        self.max_lost = max_lost
-        self.next_id = 0
-        self.tracks = {}  # id -> {'bbox': [x1,y1,x2,y2], 'lost': int}
-    def _iou(self, a, b):
-        x1 = max(a[0], b[0]); y1 = max(a[1], b[1]); x2 = min(a[2], b[2]); y2 = min(a[3], b[3])
-        w = max(0, x2 - x1); h = max(0, y2 - y1)
-        inter = w * h
-        area_a = max(1e-6, (a[2]-a[0])*(a[3]-a[1]))
-        area_b = max(1e-6, (b[2]-b[0])*(b[3]-b[1]))
-        union = area_a + area_b - inter
-        return inter / union if union>0 else 0.0
-    def update(self, dets):
-        # dets: list of dicts with 'bbox'
-        assigned_ids = []
+    def __init__(self): self.next_id=0; self.tracks={}
+    def _iou(self,a,b):
+        x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
+        w=max(0,x2-x1);h=max(0,y2-y1);inter=w*h
+        aa=max(1e-6,(a[2]-a[0])*(a[3]-a[1]));ab=max(1e-6,(b[2]-b[0])*(b[3]-b[1]))
+        return inter/(aa+ab-inter) if (aa+ab-inter)>0 else 0.0
+    def update(self,dets):
+        used=[]
         for det in dets:
-            best_id = None; best_iou = 0.0
-            for tid, t in self.tracks.items():
-                iou = self._iou(det['bbox'], t['bbox'])
-                if iou > best_iou:
-                    best_iou = iou; best_id = tid
-            if best_iou >= self.iou_thresh and best_id not in assigned_ids:
-                det['track_id'] = best_id
-                self.tracks[best_id]['bbox'] = det['bbox']
-                self.tracks[best_id]['lost'] = 0
-                assigned_ids.append(best_id)
+            best_id=None;best_iou=0.0
+            for tid,t in self.tracks.items():
+                iou=self._iou(det["bbox"],t["bbox"])
+                if iou>best_iou: best_iou=iou;best_id=tid
+            if best_iou>=0.3 and best_id not in used:
+                det["track_id"]=best_id;self.tracks[best_id].update(bbox=det["bbox"],lost=0);used.append(best_id)
             else:
-                tid = self.next_id; self.next_id += 1
-                det['track_id'] = tid
-                self.tracks[tid] = {'bbox': det['bbox'], 'lost': 0}
-                assigned_ids.append(tid)
-        # increment lost and cleanup
-        current_ids = set(d['track_id'] for d in dets)
-        for tid in list(self.tracks.keys()):
-            if tid not in current_ids:
-                self.tracks[tid]['lost'] += 1
-                if self.tracks[tid]['lost'] > self.max_lost:
-                    del self.tracks[tid]
+                tid=self.next_id;self.next_id+=1
+                det["track_id"]=tid;self.tracks[tid]={"bbox":det["bbox"],"lost":0};used.append(tid)
+        tid_set={d["track_id"] for d in dets}
+        for tid in list(self.tracks):
+            if tid not in tid_set:
+                self.tracks[tid]["lost"]+=1
+                if self.tracks[tid]["lost"]>5: del self.tracks[tid]
         return dets
 
-tracker = SimpleTracker()
-
-fall_d   = FallDetector(cfg.get("fall",{}))
-pose_d = None
-hand_d   = HandSOSDetector(cfg.get("hand_sos",{}))
-
-
-def detect_frame(frame):
-    # encode to jpeg and POST to model-server
-    _, buf = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+def _api(endpoint, frame, timeout=5):
+    _,buf=cv2.imencode(".jpg",frame,[cv2.IMWRITE_JPEG_QUALITY,80])
     try:
-        r = requests.post(DETECTOR_URL + '/detect', files={'image': ('frame.jpg', buf.tobytes(), 'image/jpeg')}, timeout=5)
-        if r.status_code != 200:
-            return []
-        return r.json().get('detections', [])
-    except Exception:
-        return []
+        r=requests.post(DET_URL+endpoint,files={"image":("f.jpg",buf.tobytes(),"image/jpeg")},timeout=timeout)
+        if r.status_code==200: return r.json()
+    except Exception: pass
+    return {}
 
-zones    = ZoneManager("config/zones.yaml","default")
-# AlertDispatcher cooldowns: read per-event cooldowns from config (fall/hand_sos) with a default
-alert_default = cfg.get("general",{}).get("alert_cooldown_seconds", cfg.get("fall",{}).get("cooldown_seconds", 120))
-alert_cds = {
-    "fall": cfg.get("fall",{}).get("cooldown_seconds", alert_default),
-    "hand_sos": cfg.get("hand_sos",{}).get("cooldown_seconds", alert_default),
-}
-# enforce single alert per local file (config.general.one_alert_per_file, default True)
-enforce_one = cfg.get('general',{}).get('one_alert_per_file', True)
+def main(src:str, port:int=8081, location:str=""):
+    source_id=str(Path(src).resolve()) if Path(src).exists() else str(src)
 
-# Initialize help dispatcher
-help_disp = HelpRequestDispatcher(
-    webhook_url="",  # Loaded from .env via HelpRequestDispatcher.__init__
-    timeout=5,
-    db=database
-)
+    vlc_mgr=None
+    if src.startswith("http") or src.startswith("rtsp"):
+        url=src
+    else:
+        vlc_mgr=VLCStreamManager(src=src,width=W,height=H,fps=SAMPLING_FPS,port=port)
+        try: url=vlc_mgr.start()
+        except RuntimeError as e:
+            print(f"[VLC] {e}"); return
 
-disp     = AlertDispatcher(cooldowns=alert_cds, default_cooldown=alert_default, enforce_one_per_file=enforce_one, help_dispatcher=help_disp, db=database)
-viz      = Visualizer()
-cds      = defaultdict(lambda:{
-    "fall_warning": CooldownEngine("fall_warning", cfg.get("fall_warning", cfg.get("fall",{}))),
-    "fall":     CooldownEngine("fall",     cfg.get("fall",{})),
-})
-hand_cd  = CooldownEngine("hand_sos", cfg.get("hand_sos",{}))
-
-def main(src, port=8081, location=None):
-    # normalize source identifier to absolute path when possible so each file/source is unique
-    try:
-        source_id = str(Path(src).resolve()) if src and Path(src).exists() else str(src)
-    except Exception:
-        source_id = str(src)
-    # optional human-friendly location string from sources.yaml
-    source_location = location or None
-
-    vlc_proc, url = start_vlc(src, port)
-
-    cap = cv2.VideoCapture(url)
+    cap=cv2.VideoCapture(url)
     if not cap.isOpened():
-        print(f"Cannot open: {url}"); return
+        print(f"[cap] Cannot open: {url}")
+        if vlc_mgr: vlc_mgr.stop(); return
 
-    print(f"Connected: {url}")
-    print("Headless mode — alerts/ & logs/alerts.log")
-    print("Press Ctrl+C to stop\n")
+    print(f"[{source_id[-30:]}] Connected | location={location or '?'}")
 
-    n = 0
+    tracker =SimpleTracker()
+    fall_d  =FallDetector(cfg.get("fall",{}))
+    hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
+    obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}),"alert_dir":"alerts"})
+    zones   =ZoneManager("config/zones.yaml","default")
+    viz     =Visualizer()
+
+    alert_cd    = GEN.get("alert_cooldown_seconds",cfg.get("fall",{}).get("cooldown_seconds",120))
+    snapshot_dir = str(ROOT / "logs" / "snapshots")
+
+    # ── Help Request Dispatcher เชื่อม MongoDB จริง ── NEW
+    webhook_url = os.getenv("HELP_WEBHOOK_URL")
+    if not webhook_url:
+        print("⚠️  HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
+
+    help_disp = HelpRequestDispatcher(
+    webhook_url=webhook_url or "",  # บังคับเป็น str เสมอ
+    )
+
+    disp=AlertDispatcher(
+        cooldowns={"fall":cfg.get("fall",{}).get("cooldown_seconds",alert_cd),
+                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)},
+        default_cooldown=alert_cd,
+        enforce_one_per_file=GEN.get("one_alert_per_file",True),
+        snapshot_dir=snapshot_dir,
+        help_dispatcher=help_disp)
+
+    cds=defaultdict(lambda:{
+        "fall_warning":CooldownEngine("fall_warning",cfg.get("fall_warning",cfg.get("fall",{}))),
+        "fall":CooldownEngine("fall",cfg.get("fall",{}))})
+
+    hand_states={}
+    hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
+    fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
+    s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
+                                  "motion_hist":deque(maxlen=TRIG_FRAMES),
+                                  "triggered":False,"trigger_time":None,"frames_in_trigger":0})
+    n=0
     try:
-        # State for unique event logging (per-track for hand SOS)
-        hand_event_active = dict()
-        hand_best_conf = dict()
-        hand_best_frame = dict()
-        hand_best_time = dict()
-        hand_states = dict()  # per-track state 0..3
+        while True:
+            ret,raw=cap.read()
+            if not ret: time.sleep(0.05); continue
+            n+=1
+            if n%max(1,SKIP)!=0: continue
 
-        fall_event_active = dict()
-        fall_best_conf = dict()
-        fall_best_frame = dict()
-        fall_best_time = dict()
-
-        # Streaming/lightweight trigger buffers and per-track streaming state
-        frame_buffers = defaultdict(lambda: deque(maxlen=ROLLING_WINDOW_FRAMES))  # raw frames per source
-        streaming_states = defaultdict(lambda: {
-            "angle_hist": deque(maxlen=TRIGGER_FRAMES),
-            "motion_hist": deque(maxlen=TRIGGER_FRAMES),
-            "triggered": False,
-            "trigger_time": None,
-            "frames_in_trigger": 0,
-        })
-
-        running = True
-        while running:
-            ret, raw = cap.read()
-            if not ret:
-                time.sleep(0.05); continue
-            n += 1
-            if n % SKIP != 0:
-                continue
-
-            frame = preprocess(raw, W, H)
-            h, w  = frame.shape[:2]
+            frame=preprocess(raw,W,H)
+            h,w=frame.shape[:2]
             zones.draw(frame)
 
-            # run hand detector to populate landmarks (association done per-track later)
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            try:
-                hand_d.process_frame(rgb)
-            except Exception:
-                pass
+            rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
+            try: hand_d.process_frame(rgb)
+            except Exception: pass
 
-            now_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            now_time=time.strftime("%Y-%m-%d %H:%M:%S")
+            resp=_api("/detect_all",frame)
+            pdets=resp.get("people",[])
+            odets=resp.get("objects",[])
 
-            # fall + pose (per track id)
-            raw_dets = detect_frame(frame)
-            if raw_dets:
-                # assign tracks
-                assigned = tracker.update(raw_dets)
-                # build wrapper objects expected by downstream code
-                xyxy = [d['bbox'] for d in assigned]
-                confs = [d.get('conf', 0.0) for d in assigned]
-                ids = [d.get('track_id') for d in assigned]
-                boxes = BoxesWrapper(xyxy, confs, ids)
-                kpts = KeypointsWrapper([d.get('keypoints', []) for d in assigned])
-                for i in range(len(boxes)):
-                    bbox = boxes.xyxy[i].cpu().numpy().tolist()
-                    x1, y1, x2, y2 = bbox
-                    conf = float(boxes.conf[i].cpu())
-                    tid  = int(boxes.id[i].cpu()) if boxes.id is not None else i
-                    if kpts is None or not kpts.data or i>=len(kpts.data): continue
-                    kp = kpts.data[i].cpu().numpy()
-                    cx = (bbox[0]+bbox[2])/2/w
-                    cy = (bbox[1]+bbox[3])/2/h
-                    if not zones.in_zone(cx,cy): continue
+            # ── Object Guardian ──────────────────────────────────────────
+            import uuid
+            gp=[{"bbox":d["bbox"],"track_id":i} for i,d in enumerate(pdets)]
+            for oa in obj_grd.update(frame,odets,gp,source_id=source_id,location=location):
+                alert_logger.log_object_event(oa)
+                # ← NEW: บันทึกของหายลง MongoDB
+                try:
 
-                    fr = fall_d.process(tid,kp,bbox,h,w)
-                    pr = {"is_sos": False}
-                    cd = cds[tid]
-                    now_time = time.strftime("%Y-%m-%d %H:%M:%S")
+                        insert_incident(
+                            event_uuid    = str(uuid.uuid4()),
+                            event_type    = "fall",
+                            severity      = lv,          # int จาก _assess_alert_level
+                            severity_name = ln,          # str จาก _assess_alert_level
+                            source_id     = source_id,
+                            location      = location,
+                            track_id      = tid,
+                            image_path    = str(img_path),
+                            extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+)
+                    
+                except Exception as e:
+                    print(f"[DB] object_lost insert error: {e}")
+            obj_grd.draw(frame)
 
-                    # Fall warning: dispatch a warning-level alert earlier using fall_warning cooldown
-                    try:
-                        fw_cd = cd.get("fall_warning") if isinstance(cd, dict) else None
-                        is_down = bool(fr.get("is_down") and not fr.get("recovered_quickly"))
-                        if fw_cd and fw_cd.update(is_down):
-                            warn_frame = raw.copy()
-                            label_w = f"FALL WARNING {now_time} @ {source_location or 'unknown'}"
-                            cv2.putText(warn_frame, label_w, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,165,255), 2)
-                            disp.dispatch("fall_warning", warn_frame, {"track_id":tid, "source": source_id, "location": source_location, "warning": True, "recovered_quickly": fr.get('recovered_quickly')})
-                    except Exception:
-                        pass
+            # ── People tracking ──────────────────────────────────────────
+            if pdets:
+                assigned=tracker.update(pdets)
+                boxes=BoxesWrapper([d["bbox"] for d in assigned],
+                                   [d.get("conf",0.0) for d in assigned],
+                                   [d.get("track_id") for d in assigned])
+                kpts=KeypointsWrapper([d.get("keypoints",[]) for d in assigned])
+            else:
+                boxes=None; kpts=None
 
-                    # --- Lightweight streaming trigger: maintain short history and detect quick triggers ---
-                    try:
-                        # keep raw frame history per source (for context/capture on trigger)
-                        try:
-                            frame_buffers[source_id].append(raw.copy())
-                        except Exception:
-                            pass
+            if boxes and kpts and kpts.data:
+                for i in range(len(boxes.xyxy)):
+                    bbox=boxes.xyxy[i].cpu().numpy().tolist()
+                    conf=float(boxes.conf[i].cpu())
+                    tid=int(boxes.id[i].cpu()) if boxes.id else i
+                    if i>=len(kpts.data): continue
+                    kp=kpts.data[i].cpu().numpy()
+                    x1,y1,x2,y2=bbox
+                    if not zones.in_zone((x1+x2)/2/w,(y1+y2)/2/h): continue
 
-                        st = streaming_states[tid]
-                        angle = float(fr.get('spine_angle') or 0.0)
-                        avg_vel_norm = float(fr.get('avg_vel_norm') or fr.get('avg_vel_norm', 0.0) or 0.0)
-                        st['angle_hist'].append(angle)
-                        st['motion_hist'].append(abs(avg_vel_norm))
+                    fr=fall_d.process(tid,kp,bbox,h,w)
+                    cd=cds[tid]
 
-                        # simple triggers:
-                        triggered = False
-                        # A: sudden angle change
-                        if len(st['angle_hist']) >= TRIGGER_FRAMES:
-                            if (max(st['angle_hist']) - min(st['angle_hist'])) >= TRIGGER_ANGLE_DELTA:
-                                triggered = True
-                        # B: high motion then low motion with torso angle fairly large
-                        motion_thresh = cfg.get('fall',{}).get('motion_thresh_norm', 0.02)
-                        if len(st['motion_hist']) >= 2:
-                            if st['motion_hist'][-2] > motion_thresh*3 and st['motion_hist'][-1] < motion_thresh and angle >= LYING_ANGLE_THRESH:
-                                triggered = True
-                        # C: sustained high torso angle
-                        if sum(1 for a in st['angle_hist'] if a >= LYING_ANGLE_THRESH) >= TRIGGER_FRAMES:
-                            triggered = True
-
-                        # if newly triggered, set timestamp and emit a light warning
-                        if triggered and not st['triggered']:
-                            st['triggered'] = True
-                            st['trigger_time'] = time.time()
-                            st['frames_in_trigger'] = 0
+                    # ── Fall Warning ─────────────────────────────────────
+                    fw_cd=cd.get("fall_warning")
+                    if fw_cd and fw_cd.update(bool(fr.get("is_down"))):
+                        wf=raw.copy()
+                        cv2.putText(wf,f"FALL WARNING {now_time} @ {location}",(30,50),
+                                    cv2.FONT_HERSHEY_SIMPLEX,1.0,(0,165,255),2)
+                        ex={"track_id":tid,"source":source_id,"location":location,"warning":True}
+                        img_path = disp.dispatch("fall_warning",wf,ex)
+                        if img_path:
+                            alert_logger.log_sos_event(
+                                event_type="fall_warning",severity=1,severity_name="MED",
+                                source_id=source_id,source_path=src,location=location,
+                                track_id=tid,image_path=str(img_path),meta_path=None,flags=[],extra=ex)
+                            # ← NEW: บันทึก fall_warning ลง MongoDB
                             try:
-                                warn_frame = raw.copy()
-                                label_w = f"LIGHT FALL TRIGGER {now_time} @ {source_location or 'unknown'}"
-                                cv2.putText(warn_frame, label_w, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,165,255), 2)
-                                # lightweight trigger uses same 'fall_warning' event type so existing cooldowns apply
-                                disp.dispatch("fall_warning", warn_frame, {"track_id":tid, "source": source_id, "location": source_location, "trigger": "light", "recovered_quickly": fr.get('recovered_quickly'), "fall_result": fr})
-                            except Exception:
-                                pass
+                                insert_incident(
+                                    event_uuid    = str(uuid.uuid4()),
+                                    event_type    = "fall",
+                                    severity      = lv,          # int จาก _assess_alert_level
+                                    severity_name = ln,          # str จาก _assess_alert_level
+                                    source_id     = source_id,
+                                    location      = location,
+                                    track_id      = tid,
+                                    image_path    = str(img_path),
+                                    extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                )
+                            except Exception as e:
+                                print(f"[DB] fall_warning insert error: {e}")
 
-                        # if already triggered, update frames_in_trigger and check for recovery
-                        if st['triggered']:
-                            st['frames_in_trigger'] += 1
-                            # quick recovery clears trigger
-                            if fr.get('recovered_quickly') or abs(avg_vel_norm) > motion_thresh*4:
-                                st['triggered'] = False
-                                st['trigger_time'] = None
-                                st['frames_in_trigger'] = 0
-                            else:
-                                # if trigger persists longer than confirmation window, keep waiting for full detector to confirm
-                                if st['trigger_time'] and (time.time() - st['trigger_time']) > CONFIRMATION_WINDOW:
-                                    # give console feedback and continue — fall_d.process will perform the conservative confirmation
-                                    print(f"Trigger window expired for track {tid} (source={source_id}) — awaiting full confirmation")
-                                    # clear trigger to avoid repeated messages; keep waiting for is_fallen to be set by fall detector
-                                    st['triggered'] = False
-                                    st['trigger_time'] = None
-                                    st['frames_in_trigger'] = 0
-                    except Exception:
-                        pass
-
-                    # Hand SOS: associate hand landmarks to this track and run per-track state machine
-                    hand_state = hand_states.get(tid, 0)
-                    hand_detected_in_bbox = False
+                    # ── Streaming trigger ────────────────────────────────
                     try:
-                        results_h = getattr(hand_d, "_results", None)
-                        if results_h and getattr(results_h, "hand_landmarks", None):
-                            for hand_landmarks in results_h.hand_landmarks:
-                                # compute bbox and center for hand
-                                xs = [lm.x for lm in hand_landmarks]
-                                ys = [lm.y for lm in hand_landmarks]
-                                minx, maxx = min(xs), max(xs)
-                                miny, maxy = min(ys), max(ys)
-                                # normalized bbox area
-                                box_w = (maxx - minx) * w
-                                box_h = (maxy - miny) * h
-                                area_norm = (box_w * box_h) / (w * h)
-                                # keypoint confidences if available
-                                kp_conf_ok = True
-                                try:
-                                    kp_conf_ok = all(getattr(lm, 'visibility', 1.0) >= cfg.get('hand_sos',{}).get('min_kp_conf', 0.4) for lm in hand_landmarks)
-                                except Exception:
-                                    pass
-                                # skip small/low-confidence hands
-                                if area_norm < cfg.get('hand_sos',{}).get('min_hand_bbox_area_norm', 0.002) or not kp_conf_ok:
-                                    continue
-                                pts = [(int(lm.x*w), int(lm.y*h)) for lm in hand_landmarks]
-                                hx = sum(p[0] for p in pts)/len(pts)
-                                hy = sum(p[1] for p in pts)/len(pts)
-                                if x1 <= hx <= x2 and y1 <= hy <= y2:
-                                    hand_detected_in_bbox = True
-                                    # update state machine using detector helpers
+                        st=s_states[tid]
+                        angle=float(fr.get("spine_angle") or 0.0)
+                        avn=float(fr.get("avg_vel_norm") or 0.0)
+                        st["angle_hist"].append(angle); st["motion_hist"].append(abs(avn))
+                        trig=False
+                        if len(st["angle_hist"])>=TRIG_FRAMES:
+                            if (max(st["angle_hist"])-min(st["angle_hist"]))>=TRIG_DELTA: trig=True
+                        mth=cfg.get("fall",{}).get("motion_thresh_norm",0.02)
+                        if len(st["motion_hist"])>=2:
+                            if st["motion_hist"][-2]>mth*3 and st["motion_hist"][-1]<mth and angle>=LYING_ANG: trig=True
+                        if sum(1 for a in st["angle_hist"] if a>=LYING_ANG)>=TRIG_FRAMES: trig=True
+                        if trig and not st["triggered"]:
+                            st.update(triggered=True,trigger_time=time.time(),frames_in_trigger=0)
+                        if st["triggered"]:
+                            st["frames_in_trigger"]+=1
+                            if fr.get("recovered_quickly") or abs(avn)>mth*4:
+                                st.update(triggered=False,trigger_time=None,frames_in_trigger=0)
+                            elif st["trigger_time"] and (time.time()-st["trigger_time"])>CONF_WIN:
+                                st.update(triggered=False,trigger_time=None,frames_in_trigger=0)
+                    except Exception: pass
+
+                    # ── Hand SOS ─────────────────────────────────────────
+                    hs=hand_states.get(tid,0); hdet=False
+                    try:
+                        rh=getattr(hand_d,"_results",None)
+                        if rh and getattr(rh,"hand_landmarks",None):
+                            for hl in rh.hand_landmarks:
+                                xs=[l.x for l in hl];ys=[l.y for l in hl]
+                                area=(max(xs)-min(xs))*w*(max(ys)-min(ys))*h/(w*h)
+                                if area<cfg.get("hand_sos",{}).get("min_hand_bbox_area_norm",0.002): continue
+                                pts=[(int(l.x*w),int(l.y*h)) for l in hl]
+                                hx=sum(p[0] for p in pts)/len(pts)
+                                hy=sum(p[1] for p in pts)/len(pts)
+                                if x1<=hx<=x2 and y1<=hy<=y2:
+                                    hdet=True
                                     try:
-                                        if hand_state==0 and hand_d._palm_open(hand_landmarks):
-                                            hand_state = 1
-                                        elif hand_state==1 and hand_d._thumb_in(hand_landmarks):
-                                            hand_state = 2
-                                        elif hand_state==2 and hand_d._fingers_closed(hand_landmarks):
-                                            hand_state = 3
-                                    except Exception:
-                                        pass
+                                        if hs==0 and hand_d._palm_open(hl): hs=1
+                                        elif hs==1 and hand_d._thumb_in(hl): hs=2
+                                        elif hs==2 and hand_d._fingers_closed(hl): hs=3
+                                    except Exception: pass
                                     break
-                    except Exception:
-                        pass
+                    except Exception: pass
+                    if not hdet: hs=max(0,hs-1)
+                    hand_states[tid]=hs
 
-                    if not hand_detected_in_bbox:
-                        hand_state = max(0, hand_state-1)
-                    hand_states[tid] = hand_state
+                    if hs==3 and not fall_ev.get(tid):
+                        if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
+                            hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
+                        hand_ev[tid]=True
+                    elif hand_ev.get(tid):
+                        if hand_bf.get(tid) is not None:
+                            cv2.putText(hand_bf[tid],f"SOS HAND {hand_bt[tid]} @ {location}",
+                                        (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                            ex={"track_id":tid,"source":source_id,"location":location}
+                            img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
+                            if img_path:
+                                alert_logger.log_sos_event(
+                                    event_type="hand_sos",severity=2,severity_name="HIGH",
+                                    source_id=source_id,source_path=src,location=location,
+                                    track_id=tid,image_path=str(img_path),meta_path=None,flags=[],extra=ex)
+                                # ← NEW: บันทึก hand_sos ลง MongoDB
+                                try:
+                                   insert_incident(
+                                        event_uuid    = str(uuid.uuid4()),
+                                        event_type    = "fall",
+                                        severity      = lv,          # int จาก _assess_alert_level
+                                        severity_name = ln,          # str จาก _assess_alert_level
+                                        source_id     = source_id,
+                                        location      = location,
+                                        track_id      = tid,
+                                        image_path    = str(img_path),
+                                        extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                    )
+                                except Exception as e:
+                                    print(f"[DB] hand_sos insert error: {e}")
+                        hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
 
-                    # handle hand event per-track (only if this track not fallen)
-                    if hand_state==3 and not fall_event_active.get(tid):
-                        if not hand_event_active.get(tid) or conf > hand_best_conf.get(tid, 0):
-                            hand_best_conf[tid] = conf
-                            hand_best_frame[tid] = raw.copy()
-                            hand_best_time[tid] = now_time
-                        hand_event_active[tid] = True
-                    elif hand_event_active.get(tid):
-                        if hand_best_frame.get(tid) is not None:
-                            label = f"SOS HAND {hand_best_time[tid]} @ {source_location or 'unknown'}"
-                            cv2.putText(hand_best_frame[tid], label, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
-                            extra_h = {"track_id":tid, "source": source_id, "location": source_location}
-                            saved = disp.dispatch("hand_sos", hand_best_frame[tid], extra_h)
-                            # clear per-track bests so we don't immediately re-dispatch
-                            hand_event_active[tid] = False
-                            hand_best_conf[tid] = 0
-                            hand_best_frame[tid] = None
-                            hand_best_time[tid] = None
-                            # saved alert for this (source,atype); do not stop processing — allow other event types to be captured
-                            pass
-
-                    # log velocities for tuning (append CSV) — skip if recovered_quickly (stumble)
-                    try:
-                        # If this event was a quick recovery (stumble), do not record it
-                        if not fr.get('recovered_quickly'):
+                    # ── Fall CSV ─────────────────────────────────────────
+                    if not fr.get("recovered_quickly"):
+                        try:
                             from pipeline import LOG_DIR
-                            logp = LOG_DIR/"fall_vels.csv"
-                            if not logp.exists():
-                                logp.write_text("ts,tid,vel_y_px_s,vel_y_norm,avg_vel_px_s,avg_vel_norm,is_down,is_fallen,is_critical,spike_time,ground_time,time_to_ground,time_lying,danger_lying\n")
-                            with open(logp, "a") as lf:
-                                lf.write(f"{now_time},{tid},{fr.get('vel_y',0)},{fr.get('vel_y_norm',0)},{fr.get('avg_vel',0)},{fr.get('avg_vel_norm',0)},{int(fr.get('is_down'))},{int(fr.get('is_fallen'))},{int(fr.get('is_critical'))},{fr.get('spike_time')},{fr.get('ground_time')},{fr.get('time_to_ground')},{fr.get('time_lying')},{int(fr.get('danger_lying'))}\n")
-                    except Exception:
-                        pass
+                            lp=LOG_DIR/"fall_vels.csv"
+                            if not lp.exists():
+                                lp.write_text("ts,tid,vel_y_px_s,vel_y_norm,avg_vel_px_s,avg_vel_norm,"
+                                              "is_down,is_fallen,is_critical,spike_time,ground_time,"
+                                              "time_to_ground,time_lying,danger_lying\n")
+                            with open(lp,"a") as lf:
+                                lf.write(f"{now_time},{tid},{fr.get('vel_y',0)},{fr.get('vel_y_norm',0)},"
+                                         f"{fr.get('avg_vel',0)},{fr.get('avg_vel_norm',0)},"
+                                         f"{int(fr.get('is_down',0))},{int(fr.get('is_fallen',0))},"
+                                         f"{int(fr.get('is_critical',0))},{fr.get('spike_time')},"
+                                         f"{fr.get('ground_time')},{fr.get('time_to_ground')},"
+                                         f"{fr.get('time_lying')},{int(fr.get('danger_lying',0))}\n")
+                        except Exception: pass
 
-                    # Immediate escalation for critical falls (no recovery within critical_seconds)
-                    # Do not escalate or record if this was a quick recovery (stumble)
-                    if fr.get("is_critical") and not fr.get('recovered_quickly'):
-                        # keep best frame for this critical event
-                        if not fall_best_conf.get(tid) or conf > fall_best_conf.get(tid, 0):
-                            fall_best_conf[tid] = conf
-                            fall_best_frame[tid] = raw.copy()
-                            fall_best_time[tid] = now_time
-                        # annotate and dispatch immediately with critical flag
-                        label = f"FALL CRITICAL {fall_best_time[tid]} @ {source_location or 'unknown'}"
-                        cv2.putText(fall_best_frame[tid], label, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
-                        extra_c = {"track_id":tid, "critical":True, "source": source_id, "location": source_location, "recovered_quickly": fr.get('recovered_quickly'), "fall_result": fr}
-                        saved = disp.dispatch("fall", fall_best_frame[tid], extra_c)
-                        # mark active so we don't re-dispatch repeatedly
-                        fall_event_active[tid] = True
-                        # saved alert for this (source,atype); do not stop processing
-                        pass
+                    # ── Critical Fall ─────────────────────────────────────
+                    if fr.get("is_critical") and not fr.get("recovered_quickly"):
+                        if not fall_bc.get(tid) or conf>fall_bc.get(tid,0):
+                            fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
+                        cv2.putText(fall_bf[tid],f"FALL CRITICAL {fall_bt[tid]} @ {location}",
+                                    (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                        ex={"track_id":tid,"critical":True,"source":source_id,"location":location,
+                            "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
+                        img_path = disp.dispatch("fall",fall_bf[tid],ex)
+                        if img_path:
+                            lv,ln,flags=disp._assess_alert_level("fall",ex)
+                            alert_logger.log_sos_event(
+                                event_type="fall",severity=lv,severity_name=ln,
+                                source_id=source_id,source_path=src,location=location,
+                                track_id=tid,image_path=str(img_path),meta_path=None,flags=flags,extra=ex)
+                            # ← NEW: บันทึก critical fall ลง MongoDB
+                            try:
+                                insert_incident(
+                                    event_uuid    = str(uuid.uuid4()),
+                                    event_type    = "fall",
+                                    severity      = lv,          # int จาก _assess_alert_level
+                                    severity_name = ln,          # str จาก _assess_alert_level
+                                    source_id     = source_id,
+                                    location      = location,
+                                    track_id      = tid,
+                                    image_path    = str(img_path),
+                                    extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                )
+                            except Exception as e:
+                                print(f"[DB] critical fall insert error: {e}")
+                        fall_ev[tid]=True
 
-                    # FALL EVENT: dispatch immediately when is_fallen becomes true (conservative detection)
-                    # Also escalate if subject has been lying immobile longer than danger.immobile_seconds
-                    # Ignore and do not record if this was a quick recovery (stumble)
-                    try:
-                        immobile_thresh = cfg.get('danger',{}).get('immobile_seconds', 5)
-                    except Exception:
-                        immobile_thresh = 5
-
-                    time_lying = fr.get('time_lying') or 0
-                    # If lying longer than immobile threshold and not recovered_quickly, escalate even if is_fallen not yet True
-                    # Only auto-escalate when detector marks danger_lying (sustained extended inactivity)
-                    should_escalate_immobile = (fr.get('danger_lying') and not fr.get('recovered_quickly'))
-
-                    if (fr.get("is_fallen") or should_escalate_immobile) and not fr.get('recovered_quickly'):
-                        # first time we confirm fall for this tid -> dispatch alert
-                        if not fall_event_active.get(tid):
-                            fall_best_conf[tid] = conf
-                            fall_best_frame[tid] = raw.copy()
-                            fall_best_time[tid] = now_time
-                            label = f"FALL {fall_best_time[tid]} @ {source_location or 'unknown'}"
-                            cv2.putText(fall_best_frame[tid], label, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,0,255), 3)
-                            extra = {"track_id":tid, "source": source_id, "location": source_location, "recovered_quickly": fr.get('recovered_quickly'), "fall_result": fr}
-                            if should_escalate_immobile:
-                                extra['auto_escalated_immobile'] = True
-                            saved = disp.dispatch("fall", fall_best_frame[tid], extra)
-                            # mark active so we don't re-dispatch repeatedly
-                            fall_event_active[tid] = True
-                            # saved alert for this (source,atype); do not stop processing
-                            pass
+                    # ── Confirmed Fall ────────────────────────────────────
+                    try: imm=cfg.get("danger",{}).get("immobile_seconds",5)
+                    except Exception: imm=5
+                    esc=fr.get("danger_lying") and not fr.get("recovered_quickly")
+                    if (fr.get("is_fallen") or esc) and not fr.get("recovered_quickly"):
+                        if not fall_ev.get(tid):
+                            fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
+                            cv2.putText(fall_bf[tid],f"FALL {fall_bt[tid]} @ {location}",
+                                        (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                            ex={"track_id":tid,"source":source_id,"location":location,
+                                "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
+                            if esc: ex["auto_escalated_immobile"]=True
+                            img_path = disp.dispatch("fall",fall_bf[tid],ex)
+                            if img_path:
+                                lv,ln,flags=disp._assess_alert_level("fall",ex)
+                                alert_logger.log_sos_event(
+                                    event_type="fall",severity=lv,severity_name=ln,
+                                    source_id=source_id,source_path=src,location=location,
+                                    track_id=tid,image_path=str(img_path),meta_path=None,flags=flags,extra=ex)
+                                # ← NEW: บันทึก confirmed fall ลง MongoDB
+                                try:
+                                    insert_incident(
+                                        event_uuid    = str(uuid.uuid4()),
+                                        event_type    = "fall",
+                                        severity      = lv,          # int จาก _assess_alert_level
+                                        severity_name = ln,          # str จาก _assess_alert_level
+                                        source_id     = source_id,
+                                        location      = location,
+                                        track_id      = tid,
+                                        image_path    = str(img_path),
+                                        extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                    )
+                                except Exception as e:
+                                    print(f"[DB] confirmed fall insert error: {e}")
+                            fall_ev[tid]=True
                         else:
-                            # update best frame if higher confidence later
-                            if conf > fall_best_conf.get(tid, 0):
-                                fall_best_conf[tid] = conf
-                                fall_best_frame[tid] = raw.copy()
-                                fall_best_time[tid] = now_time
+                            if conf>fall_bc.get(tid,0):
+                                fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
                     else:
-                        # recovered or not confirmed; clear active state
-                        if fall_event_active.get(tid):
-                            fall_event_active[tid] = False
-                            fall_best_conf[tid] = 0
-                            fall_best_frame[tid] = None
-                            fall_best_time[tid] = None
-
+                        if fall_ev.get(tid):
+                            fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
 
             viz.fps(frame)
 
     except KeyboardInterrupt:
-        print("\nStopped.")
+        print(f"\n[{source_id[-30:]}] Stopped.")
     finally:
-        cap.release()
-        hand_d.release()
-        if vlc_proc:
-            vlc_proc.terminate()
-        print("Done. Check alerts/ and logs/")
+        cap.release(); hand_d.release()
+        if vlc_mgr: vlc_mgr.stop()
+        print(f"[{source_id[-30:]}] Done.")
 
-import yaml
-import multiprocessing
-try:
-    multiprocessing.set_start_method("spawn", force=True)
-except RuntimeError:
-    pass
-
-def run_source(src):
-    try:
-        print(f"\n=== Running source: {src.get('id')} | {src.get('path')} | port {src.get('port')} ===")
-        main(src.get('path'), src.get('port', 8081), src.get('location'))
-    except Exception as e:
-        print(f"Source {src.get('id')} raised exception: {e}")
-    finally:
-        print(f"Source {src.get('id')} finished")
+def run_source(s):
+    try: main(s["path"],s.get("port",8081),s.get("location",""))
+    except Exception as e: print(f"[run_source] {s.get('id')} error: {e}")
 
 if __name__=="__main__":
-    # Load sources.yaml
-    sources = yaml.safe_load(Path("config/sources.yaml").read_text())["sources"]
-    procs = []
-    for src in sources:
-        p = multiprocessing.Process(target=run_source, args=(src,))
-        p.daemon = False
-        p.start()
-        procs.append((src, p))
-
-    # Monitor processes; don't block in a single join() so we can report statuses
+    try: multiprocessing.set_start_method("spawn",force=True)
+    except RuntimeError: pass
+    sources=yaml.safe_load((ROOT/"config/sources.yaml").read_text())["sources"]
+    procs=[]
+    for s in sources:
+        p=multiprocessing.Process(target=run_source,args=(s,))
+        p.daemon=False; p.start(); procs.append((s,p))
     try:
         while True:
-            alive = [ (s,p) for s,p in procs if p.is_alive() ]
-            if not alive:
-                print("All sources finished")
-                break
-            for s,p in procs:
-                if p.is_alive():
-                    print(f"Source {s.get('id')} (pid={p.pid}) running")
-                else:
-                    if p.exitcode is not None:
-                        print(f"Source {s.get('id')} exited (code={p.exitcode})")
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("KeyboardInterrupt: terminating child processes...")
-        for s,p in procs:
-            if p.is_alive():
-                p.terminate()
-        print("Terminated children")
+            if not any(p.is_alive() for _,p in procs): print("All done"); break
+            time.sleep(5)
+    except KeyboardInterrupt: print("Stopping …")
     finally:
-        for s,p in procs:
-            if p.is_alive():
-                p.terminate()
-        print("Main exiting")
+        for _,p in procs:
+            if p.is_alive(): p.terminate()
+        print("Main exiting.")
