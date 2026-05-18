@@ -104,6 +104,91 @@ async def detect(image: UploadFile = File(...)):
         })
     return {"detections": dets}
 
+@app.post('/detect_all')
+async def detect_all(image: UploadFile = File(...)):
+    """Detect people and objects — returns both."""
+    data = await image.read()
+    arr = np.frombuffer(data, np.uint8)
+    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if frame is None:
+        return {"people": [], "objects": []}
+    h, w = frame.shape[:2]
+    try:
+        results = yolo(frame, conf=PERSON_CONF)
+    except Exception as e:
+        print('[model-server] inference error', e)
+        return {"people": [], "objects": []}
+
+    people = []
+    objects = []
+
+    if not results or results[0].boxes is None:
+        return {"people": people, "objects": objects}
+
+    boxes = results[0].boxes
+    kpts = getattr(results[0], 'keypoints', None)
+    classes = getattr(boxes, 'cls', None)
+
+    xy = None
+    try:
+        xy = boxes.xyxy.cpu().numpy()
+    except Exception:
+        try:
+            xy = np.array(boxes.xyxy)
+        except Exception:
+            xy = []
+
+    confs = []
+    try:
+        confs = boxes.conf.cpu().numpy().tolist()
+    except Exception:
+        try:
+            confs = list(boxes.conf)
+        except Exception:
+            confs = []
+
+    kpts_all = []
+    if kpts is not None and getattr(kpts, 'data', None) is not None:
+        try:
+            karr = kpts.data.cpu().numpy()
+            for kp in karr:
+                kp_list = []
+                for x,y,c in kp:
+                    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                        kp_list.append([float(x*w), float(y*h), float(c)])
+                    else:
+                        kp_list.append([float(x), float(y), float(c)])
+                kpts_all.append(kp_list)
+        except Exception:
+            try:
+                for item in kpts.data:
+                    kp = np.array(item)
+                    kp_list=[]
+                    for x,y,c in kp:
+                        if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                            kp_list.append([float(x*w), float(y*h), float(c)])
+                        else:
+                            kp_list.append([float(x), float(y), float(c)])
+                    kpts_all.append(kp_list)
+            except Exception:
+                kpts_all = []
+
+    for i_box, box in enumerate(xy.tolist() if hasattr(xy, 'tolist') else xy):
+        x1,y1,x2,y2 = [float(v) for v in box]
+        conf = float(confs[i_box]) if i_box < len(confs) else 0.0
+        kp = kpts_all[i_box] if i_box < len(kpts_all) else []
+        cls_id = int(classes[i_box]) if classes is not None and i_box < len(classes) else 0
+
+        det = {'bbox':[x1,y1,x2,y2], 'conf': conf, 'keypoints': kp}
+
+        if cls_id == 0:
+            people.append(det)
+        else:
+            det['class_id'] = cls_id
+            objects.append(det)
+
+    return {"people": people, "objects": objects}
+
 if __name__=='__main__':
-    print('[model-server] starting uvicorn on 127.0.0.1:9000')
-    uvicorn.run(app, host='127.0.0.1', port=9000, log_level='info')
+    print('[model-server] starting uvicorn on 127.0.0.1:8000')
+    uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')

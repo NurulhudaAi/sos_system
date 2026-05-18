@@ -58,14 +58,17 @@ class VLCStreamManager:
             f":std{{access=http,mux=mpjpeg,dst=0.0.0.0:{self.port}/}}"
         )
 
-        # ตรวจว่าเป็นไฟล์หรือ stream
         src_path = Path(self.src)
         input_src = str(src_path.resolve()) if src_path.exists() else self.src
 
+        vlc_bin = "/Applications/VLC.app/Contents/MacOS/VLC"
+        if not Path(vlc_bin).exists():
+            vlc_bin = "vlc"
+
         cmd = [
-            "vlc", "-I", "dummy",
+            vlc_bin, "-I", "dummy",
             "--no-audio",
-            "--loop",                        # วนซ้ำถ้าเป็นไฟล์
+            "--loop",
             input_src,
             f"--sout={sout}",
             "--sout-keep",
