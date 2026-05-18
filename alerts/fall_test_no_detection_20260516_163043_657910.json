@@ -1,0 +1,40 @@
+{
+  "event_uuid": "f18ef747-b637-48ca-b351-4d29d9ecd798",
+  "event_type": "fall_test_no_detection",
+  "detected": false,
+  "source": {
+    "id": "test_cam_1",
+    "path": "/Users/nurulhudaadamishaq/Downloads/fall1.mp4",
+    "port": 8081,
+    "location": "ห้องนอน"
+  },
+  "video_path": "/Users/nurulhudaadamishaq/Downloads/fall1.mp4",
+  "frame_count": 853,
+  "processed_frames": 853,
+  "detection_frame": null,
+  "detection_video_time_s": null,
+  "elapsed_s": 24.77,
+  "best_result": {
+    "is_fallen": false,
+    "is_down": false,
+    "time_down": 0.0,
+    "bbox_ratio": 2.68,
+    "spine_angle": 6.599999904632568,
+    "vel_y": -61.3,
+    "avg_vel": 155.4,
+    "vel_y_norm": -0.0567,
+    "avg_vel_norm": 0.1439,
+    "is_critical": false,
+    "spike_time": null,
+    "ground_time": null,
+    "time_to_ground": null,
+    "time_lying": null,
+    "danger_lying": false,
+    "recovered_quickly": false,
+    "track_id": 1,
+    "confidence": 0.7765,
+    "frame": 745
+  },
+  "image_path": "/Users/nurulhudaadamishaq/Documents/sos_system/alerts/fall_test_no_detection_20260516_163043_657910.jpg",
+  "created_at": "2026-05-16T16:30:43.657910+00:00"
+}

@@ -1,20 +1,9 @@
 path,expected,detected,detected_time_s,frames
-/Users/nurulhudaadamishaq/Downloads/fall1.mp4,real_fall,False,None,853
-/Users/nurulhudaadamishaq/Downloads/fall2.mp4,real_fall,False,None,385
-/Users/nurulhudaadamishaq/Downloads/fall3.mp4,real_fall,False,None,319
-/Users/nurulhudaadamishaq/Downloads/fall4.mp4,real_fall,True,17.82,665
-/Users/nurulhudaadamishaq/Downloads/fall5.mp4,real_fall,False,None,907
-/Users/nurulhudaadamishaq/Downloads/trip1.mp4,stumble,False,None,535
-/Users/nurulhudaadamishaq/Downloads/trip2.mp4,stumble,False,None,199
-/Users/nurulhudaadamishaq/Downloads/trip3.mp4,stumble,False,None,469
-/Users/nurulhudaadamishaq/Downloads/trip4.mp4,stumble,False,None,238
-/Users/nurulhudaadamishaq/Downloads/trip5.mp4,stumble,False,None,272
-/Users/nurulhudaadamishaq/Downloads/walking1.mp4,non_fall,False,None,228
-/Users/nurulhudaadamishaq/Downloads/walking2.mp4,non_fall,False,None,433
+/Users/nurulhudaadamishaq/Downloads/fall1.mp4,real_fall,True,17.14,472
 
 TP,1
-FN,4
+FN,0
 FP,0
-TN,2
+TN,0
 precision,1.0
-recall,0.2
+recall,1.0

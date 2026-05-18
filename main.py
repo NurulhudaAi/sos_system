@@ -198,23 +198,6 @@ def main(src:str, port:int=8081, location:str=""):
             gp=[{"bbox":d["bbox"],"track_id":i} for i,d in enumerate(pdets)]
             for oa in obj_grd.update(frame,odets,gp,source_id=source_id,location=location):
                 alert_logger.log_object_event(oa)
-                # ← NEW: บันทึกของหายลง MongoDB
-                try:
-
-                        insert_incident(
-                            event_uuid    = str(uuid.uuid4()),
-                            event_type    = "fall",
-                            severity      = lv,          # int จาก _assess_alert_level
-                            severity_name = ln,          # str จาก _assess_alert_level
-                            source_id     = source_id,
-                            location      = location,
-                            track_id      = tid,
-                            image_path    = str(img_path),
-                            extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
-)
-                    
-                except Exception as e:
-                    print(f"[DB] object_lost insert error: {e}")
             obj_grd.draw(frame)
 
             # ── People tracking ──────────────────────────────────────────
@@ -253,18 +236,17 @@ def main(src:str, port:int=8081, location:str=""):
                                 event_type="fall_warning",severity=1,severity_name="MED",
                                 source_id=source_id,source_path=src,location=location,
                                 track_id=tid,image_path=str(img_path),meta_path=None,flags=[],extra=ex)
-                            # ← NEW: บันทึก fall_warning ลง MongoDB
                             try:
                                 insert_incident(
                                     event_uuid    = str(uuid.uuid4()),
-                                    event_type    = "fall",
-                                    severity      = lv,          # int จาก _assess_alert_level
-                                    severity_name = ln,          # str จาก _assess_alert_level
+                                    event_type    = "fall_warning",
+                                    severity      = 1,
+                                    severity_name = "MED",
                                     source_id     = source_id,
                                     location      = location,
                                     track_id      = tid,
                                     image_path    = str(img_path),
-                                    extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                    extra         = {**ex, "confidence": conf}
                                 )
                             except Exception as e:
                                 print(f"[DB] fall_warning insert error: {e}")
@@ -331,18 +313,17 @@ def main(src:str, port:int=8081, location:str=""):
                                     event_type="hand_sos",severity=2,severity_name="HIGH",
                                     source_id=source_id,source_path=src,location=location,
                                     track_id=tid,image_path=str(img_path),meta_path=None,flags=[],extra=ex)
-                                # ← NEW: บันทึก hand_sos ลง MongoDB
                                 try:
-                                   insert_incident(
+                                    insert_incident(
                                         event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "fall",
-                                        severity      = lv,          # int จาก _assess_alert_level
-                                        severity_name = ln,          # str จาก _assess_alert_level
+                                        event_type    = "hand_sos",
+                                        severity      = 2,
+                                        severity_name = "HIGH",
                                         source_id     = source_id,
                                         location      = location,
                                         track_id      = tid,
                                         image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                        extra         = {**ex, "confidence": conf}
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")

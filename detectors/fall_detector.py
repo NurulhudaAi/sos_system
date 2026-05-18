@@ -37,7 +37,7 @@ class FallDetector:
       bbox_ratio_thresh       1.3    bbox w/h > thresh → may be lying
       spine_angle_thresh      55.0   torso angle < thresh (°) → near horizontal
       warning_seconds         2.0    is_down_basic sustained → slow-fall fallback
-      confirm_seconds         4.0    ground_time ≥ this → is_fallen (was 9 s)
+      confirm_seconds         5.0    ground_time ≥ this → is_fallen 
       critical_seconds        30.0   time_lying ≥ this → is_critical
       history_len             16     frames kept in velocity deque
       spike_thresh_norm       0.18   downward vel / frame_height per second
@@ -336,7 +336,7 @@ class FallDetector:
         # ════════════════════════════════════════════════════════════════
         # STAGE 7 — Fall confirmation
         #
-        # FIX 1: confirm_seconds default changed from 8–9 s → 4 s.
+        # FIX 1: confirm_seconds default changed from 8–9 s → 5 s.
         #         The yaml value overrides this, but the in-code default
         #         is now correct.  A confirmed fall requires either:
         #           (a) ground contact sustained ≥ confirm_s seconds, OR
