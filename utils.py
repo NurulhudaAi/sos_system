@@ -24,6 +24,7 @@ _LATIN_FONT_CANDIDATES = [
 _THAI_FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf",
     "/usr/share/fonts/truetype/tlwg/Sarabun.ttf",
+    "/Users/nurulhudaadamishaq/Library/Fonts/removed_by_sos_backup_20260430_223819/NotoSansThai-Regular.ttf",
     "/Users/nurulhudaadamishaq/Library/Fonts/NotoSansThai-Regular.ttf",
     "/Library/Fonts/NotoSansThai-Regular.ttf",
     "/System/Library/Fonts/Thonburi.ttf",
@@ -82,7 +83,7 @@ def _measure_mixed(text: str, size: int) -> tuple[int, int]:
         bb   = draw.textbbox((0, 0), seg, font=font)
         total_w += bb[2] - bb[0]
         max_h    = max(max_h, bb[3] - bb[1])
-    return total_w, max_h
+    return int(total_w), int(max_h)
 
 
 def _draw_mixed(draw: ImageDraw.ImageDraw, pos: tuple, text: str,
