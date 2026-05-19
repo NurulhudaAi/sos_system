@@ -124,9 +124,13 @@ def main(src:str, port:int=8081, location:str=""):
         url=src
     else:
         vlc_mgr=VLCStreamManager(src=src,width=W,height=H,fps=SAMPLING_FPS,port=port)
-        try: url=vlc_mgr.start()
+        try:
+            url=vlc_mgr.start()
         except RuntimeError as e:
-            print(f"[VLC] {e}"); return
+            print(f"\n❌ [VLC] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            return
 
     cap=cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -437,7 +441,15 @@ def run_source(s):
 if __name__=="__main__":
     try: multiprocessing.set_start_method("spawn",force=True)
     except RuntimeError: pass
-    sources=yaml.safe_load((ROOT/"config/sources.yaml").read_text())["sources"]
+    all_sources=yaml.safe_load((ROOT/"config/sources.yaml").read_text())["sources"]
+    sources=[s for s in all_sources if s.get("enabled",True)]
+    print(f"\n{'='*60}")
+    print(f"🎬 Multi-Source Detection System")
+    print(f"{'='*60}")
+    print(f"Enabled: {len(sources)}/{len(all_sources)} sources")
+    for s in sources:
+        print(f"  ✓ {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
+    print(f"{'='*60}\n")
     procs=[]
     for s in sources:
         p=multiprocessing.Process(target=run_source,args=(s,))
@@ -446,7 +458,7 @@ if __name__=="__main__":
         while True:
             if not any(p.is_alive() for _,p in procs): print("All done"); break
             time.sleep(5)
-    except KeyboardInterrupt: print("Stopping …")
+    except KeyboardInterrupt: print("\n⚠️  Stopping …")
     finally:
         for _,p in procs:
             if p.is_alive(): p.terminate()

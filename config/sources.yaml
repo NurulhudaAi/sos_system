@@ -1,8 +1,31 @@
 sources:
-  - id: "test_cam_1"
+  # วิดีโอไฟล์ (Local video files)
+  - id: "camera_bedroom"
+    type: "file"
     path: "/Users/nurulhudaadamishaq/Downloads/fall1.mp4"
     port: 8081
     location: "ห้องนอน"
+    enabled: true
 
-  
-  
+  # RTSP streams (IP cameras) — uncomment to enable
+  # - id: "camera_hallway"
+  #   type: "rtsp"
+  #   path: "rtsp://admin:password@192.168.1.100:554/stream1"
+  #   port: 8082
+  #   location: "ห้องโถง"
+  #   enabled: false
+
+  # - id: "camera_entrance"
+  #   type: "rtsp"
+  #   path: "rtsp://admin:password@192.168.1.101:554/stream1"
+  #   port: 8083
+  #   location: "ประตูหน้า"
+  #   enabled: false
+
+  # HTTP streams (MJPEG)
+  # - id: "camera_parking"
+  #   type: "http"
+  #   path: "http://192.168.1.102:8000/stream"
+  #   port: 8084
+  #   location: "ที่จอดรถ"
+  #   enabled: false

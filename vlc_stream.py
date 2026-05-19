@@ -86,8 +86,8 @@ class VLCStreamManager:
         try:
             self._proc = subprocess.Popen(
                 cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
         except FileNotFoundError:
             raise RuntimeError(
@@ -98,7 +98,12 @@ class VLCStreamManager:
         time.sleep(wait)
 
         if self._proc.poll() is not None:
-            raise RuntimeError(f"VLC หยุดทำงานก่อนกำหนด (exit code {self._proc.returncode})")
+            stdout, stderr = self._proc.communicate()
+            error_msg = stderr.decode('utf-8', errors='ignore') if stderr else "unknown error"
+            raise RuntimeError(
+                f"VLC หยุดทำงานก่อนกำหนด (exit code {self._proc.returncode})\n"
+                f"Error: {error_msg}"
+            )
 
         url = f"http://localhost:{self.port}/"
         logger.info(f"[VLC] Stream ready: {url}")
