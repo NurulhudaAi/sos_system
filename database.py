@@ -18,9 +18,20 @@ logger = logging.getLogger("database")
 MONGODB_URI          = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 MONGODB_DB_NAME      = os.getenv("MONGODB_DB_NAME", "iam")
 INCIDENTS_COLLECTION = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
+SNAPSHOT_SERVER_URL  = os.getenv("SNAPSHOT_SERVER_URL", "http://127.0.0.1:8000")
 
 # ─── Thread-local connection pool (1 client ต่อ thread) ──────────────────────
 _local = threading.local()
+
+
+def path_to_snapshot_url(file_path: Optional[str]) -> Optional[str]:
+    """แปลง local file path เป็น HTTP URL สำหรับ snapshot serve"""
+    if not file_path:
+        return None
+    from pathlib import Path
+    p = Path(file_path)
+    filename = p.name
+    return f"{SNAPSHOT_SERVER_URL}/snapshot/{filename}"
 
 
 def _get_client() -> MongoClient:
@@ -131,7 +142,7 @@ def insert_incident(
 
         # ─── ไฟล์ snapshot ────────────────────────────
         "image_path":   image_path,
-        "snapshot_url": image_path,
+        "snapshot_url": path_to_snapshot_url(image_path),
         "meta_path":    meta_path,
 
         # ─── ข้อมูลเพิ่มเติม ─────────────────────────

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse
 import uvicorn
 import yaml, time, io
 from pathlib import Path
@@ -9,6 +10,7 @@ from ultralytics import YOLO
 
 app = FastAPI()
 ROOT = Path(__file__).resolve().parent
+SNAPSHOT_ROOT = ROOT / "logs" / "snapshots"
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 GENERAL = cfg.get('general', {})
 YOLO_MODEL = GENERAL.get('yolo_model', '../models/yolov8n-pose.pt')
@@ -188,6 +190,20 @@ async def detect_all(image: UploadFile = File(...)):
             objects.append(det)
 
     return {"people": people, "objects": objects}
+
+@app.get('/snapshot/{filename}')
+async def get_snapshot(filename: str):
+    """Serve snapshot files from logs/snapshots directory."""
+    filename = filename.strip('{}')
+    snapshot_path = SNAPSHOT_ROOT / filename
+    if not snapshot_path.exists():
+        raise HTTPException(status_code=404, detail=f"Snapshot not found: {filename}")
+    try:
+        if not snapshot_path.is_relative_to(SNAPSHOT_ROOT):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return FileResponse(snapshot_path)
 
 if __name__=='__main__':
     print('[model-server] starting uvicorn on 127.0.0.1:8000')
