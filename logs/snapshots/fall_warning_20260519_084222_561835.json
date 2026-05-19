@@ -1,0 +1,16 @@
+{
+  "ts": "20260519_084222_561835",
+  "event": "fall_warning",
+  "label": "FALL WARNING",
+  "file": "fall_warning_20260519_084222_561835.jpg",
+  "level": 0,
+  "level_name": "LOG",
+  "flags": [],
+  "extra": {
+    "track_id": 0,
+    "source": "/Users/nurulhudaadamishaq/Downloads/fall1.mp4",
+    "location": "\u0e2b\u0e49\u0e2d\u0e07\u0e19\u0e2d\u0e19",
+    "warning": true,
+    "flags": []
+  }
+}

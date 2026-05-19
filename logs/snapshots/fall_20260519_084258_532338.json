@@ -1,0 +1,37 @@
+{
+  "ts": "20260519_084258_532338",
+  "event": "fall",
+  "label": "FALL DETECTED",
+  "file": "fall_20260519_084258_532338.jpg",
+  "level": 1,
+  "level_name": "MED",
+  "flags": [],
+  "extra": {
+    "track_id": 25,
+    "source": "/Users/nurulhudaadamishaq/Downloads/fall1.mp4",
+    "location": "\u0e2b\u0e49\u0e2d\u0e07\u0e19\u0e2d\u0e19",
+    "recovered_quickly": false,
+    "fall_result": {
+      "is_fallen": true,
+      "is_down": true,
+      "time_down": 2.1,
+      "bbox_ratio": 2.05,
+      "spine_angle": 9.6,
+      "vel_y": 16.0,
+      "avg_vel": 60.6,
+      "vel_y_norm": 0.0148,
+      "avg_vel_norm": 0.0561,
+      "is_critical": false,
+      "spike_time": 1779154977.906328,
+      "ground_time": 1779154976.44833,
+      "time_to_ground": 0.0,
+      "time_lying": 2.1,
+      "danger_lying": false,
+      "recovered_quickly": false,
+      "strong_lying_geometry": true,
+      "geometry_time": 3.1,
+      "slow_fall_fallback": true
+    },
+    "flags": []
+  }
+}

@@ -7,6 +7,13 @@ sources:
     location: "ห้องนอน"
     enabled: true
 
+  - id: "camera_bedroom"
+    type: "file"
+    path: "/Users/nurulhudaadamishaq/Downloads/fall6.mp4"
+    port: 8082
+    location: "ห้องนอน"
+    enabled: true
+
   # RTSP streams (IP cameras) — uncomment to enable
   # - id: "camera_hallway"
   #   type: "rtsp"

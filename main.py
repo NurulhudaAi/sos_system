@@ -42,7 +42,7 @@ from detectors.hand_sos_detector import HandSOSDetector
 from detectors.object_guardian   import ObjectGuardian
 from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
 from help_request_dispatcher     import HelpRequestDispatcher
-from utils                       import preprocess, Visualizer
+from utils                       import preprocess, Visualizer, add_sos_badge
 from vlc_stream                  import VLCStreamManager
 from alert_logger                import alert_logger
 from database                    import _get_db, insert_incident  # ← NEW
@@ -253,8 +253,7 @@ def main(src:str, port:int=8081, location:str=""):
                     fw_cd=cd.get("fall_warning")
                     if fw_cd and fw_cd.update(bool(fr.get("is_down"))):
                         wf=raw.copy()
-                        cv2.putText(wf,f"FALL WARNING {now_time} @ {location}",(30,50),
-                                    cv2.FONT_HERSHEY_SIMPLEX,1.0,(0,165,255),2)
+                        wf = add_sos_badge(wf, "fall_warning", location, now_time)
                         ex={"track_id":tid,"source":source_id,"location":location,"warning":True}
                         img_path = disp.dispatch("fall_warning",wf,ex)
                         if img_path:
@@ -330,8 +329,7 @@ def main(src:str, port:int=8081, location:str=""):
                         hand_ev[tid]=True
                     elif hand_ev.get(tid):
                         if hand_bf.get(tid) is not None:
-                            cv2.putText(hand_bf[tid],f"SOS HAND {hand_bt[tid]} @ {location}",
-                                        (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                            hand_bf[tid] = add_sos_badge(hand_bf[tid], "hand_sos", location, hand_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location}
                             img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
                             if img_path:
@@ -377,8 +375,7 @@ def main(src:str, port:int=8081, location:str=""):
                     if fr.get("is_critical") and not fr.get("recovered_quickly"):
                         if not fall_bc.get(tid) or conf>fall_bc.get(tid,0):
                             fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
-                        cv2.putText(fall_bf[tid],f"FALL CRITICAL {fall_bt[tid]} @ {location}",
-                                    (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                        fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
                         ex={"track_id":tid,"critical":True,"source":source_id,"location":location,
                             "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
                         img_path = disp.dispatch("fall",fall_bf[tid],ex)
@@ -412,8 +409,7 @@ def main(src:str, port:int=8081, location:str=""):
                     if (fr.get("is_fallen") or esc) and not fr.get("recovered_quickly"):
                         if not fall_ev.get(tid):
                             fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
-                            cv2.putText(fall_bf[tid],f"FALL {fall_bt[tid]} @ {location}",
-                                        (30,50),cv2.FONT_HERSHEY_SIMPLEX,1.2,(0,0,255),3)
+                            fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location,
                                 "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
                             if esc: ex["auto_escalated_immobile"]=True
