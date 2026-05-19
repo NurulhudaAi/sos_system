@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 # ──── Initialize environment (MUST BE FIRST) ────────────────────────────────
 from config.env_manager import init_env
-if not init_env(require_edit=True):
+if not init_env(require_edit=False):
     print("❌ Environment initialization failed. Exiting.")
     sys.exit(1)
 # ────────────────────────────────────────────────────────────────────────────
@@ -132,6 +132,16 @@ def main(src:str, port:int=8081, location:str=""):
             traceback.print_exc()
             return
 
+        # ── Health check: รอให้ HTTP stream พร้อมรับ connection ──────────
+        print(f"[VLC] Waiting for stream at {url} ...")
+        for attempt in range(10):
+            if vlc_mgr.health_check():
+                print(f"[VLC] Stream confirmed ready (attempt {attempt+1})")
+                break
+            time.sleep(1)
+        else:
+            print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
+
     cap=cv2.VideoCapture(url)
     if not cap.isOpened():
         print(f"[cap] Cannot open: {url}")
@@ -162,7 +172,7 @@ def main(src:str, port:int=8081, location:str=""):
         cooldowns={"fall":cfg.get("fall",{}).get("cooldown_seconds",alert_cd),
                    "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)},
         default_cooldown=alert_cd,
-        enforce_one_per_file=GEN.get("one_alert_per_file",True),
+        enforce_one_per_file=GEN.get("one_alert_per_file",False),
         snapshot_dir=snapshot_dir,
         help_dispatcher=help_disp)
 
@@ -180,7 +190,19 @@ def main(src:str, port:int=8081, location:str=""):
     try:
         while True:
             ret,raw=cap.read()
-            if not ret: time.sleep(0.05); continue
+            if not ret:
+                # ── ถ้า VLC ตาย ให้ restart แล้ว reconnect ─────────────────
+                if vlc_mgr and not vlc_mgr.is_alive():
+                    print(f"⚠️  [VLC] Process died — restarting ...")
+                    try:
+                        url = vlc_mgr.restart()
+                        cap.release()
+                        time.sleep(3)
+                        cap = cv2.VideoCapture(url)
+                    except Exception as restart_err:
+                        print(f"❌ [VLC] Restart failed: {restart_err}")
+                        break
+                time.sleep(0.05); continue
             n+=1
             if n%max(1,SKIP)!=0: continue
 
