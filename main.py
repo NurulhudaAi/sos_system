@@ -176,10 +176,6 @@ def main(src:str, port:int=8081, location:str=""):
         snapshot_dir=snapshot_dir,
         help_dispatcher=help_disp)
 
-    cds=defaultdict(lambda:{
-        "fall_warning":CooldownEngine("fall_warning",cfg.get("fall_warning",cfg.get("fall",{}))),
-        "fall":CooldownEngine("fall",cfg.get("fall",{}))})
-
     hand_states={}
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
@@ -247,34 +243,7 @@ def main(src:str, port:int=8081, location:str=""):
                     if not zones.in_zone((x1+x2)/2/w,(y1+y2)/2/h): continue
 
                     fr=fall_d.process(tid,kp,bbox,h,w)
-                    cd=cds[tid]
 
-                    # ── Fall Warning ─────────────────────────────────────
-                    fw_cd=cd.get("fall_warning")
-                    if fw_cd and fw_cd.update(bool(fr.get("is_down"))):
-                        wf=raw.copy()
-                        wf = add_sos_badge(wf, "fall_warning", location, now_time)
-                        ex={"track_id":tid,"source":source_id,"location":location,"warning":True}
-                        img_path = disp.dispatch("fall_warning",wf,ex)
-                        if img_path:
-                            alert_logger.log_sos_event(
-                                event_type="fall_warning",severity=1,severity_name="MED",
-                                source_id=source_id,source_path=src,location=location,
-                                track_id=tid,image_path=str(img_path),meta_path=None,flags=[],extra=ex)
-                            try:
-                                insert_incident(
-                                    event_uuid    = str(uuid.uuid4()),
-                                    event_type    = "fall_warning",
-                                    severity      = 1,
-                                    severity_name = "MED",
-                                    source_id     = source_id,
-                                    location      = location,
-                                    track_id      = tid,
-                                    image_path    = str(img_path),
-                                    extra         = {**ex, "confidence": conf}
-                                )
-                            except Exception as e:
-                                print(f"[DB] fall_warning insert error: {e}")
 
                     # ── Streaming trigger ────────────────────────────────
                     try:
@@ -371,47 +340,18 @@ def main(src:str, port:int=8081, location:str=""):
                                          f"{fr.get('time_lying')},{int(fr.get('danger_lying',0))}\n")
                         except Exception: pass
 
-                    # ── Critical Fall ─────────────────────────────────────
-                    if fr.get("is_critical") and not fr.get("recovered_quickly"):
-                        if not fall_bc.get(tid) or conf>fall_bc.get(tid,0):
-                            fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
-                        fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
-                        ex={"track_id":tid,"critical":True,"source":source_id,"location":location,
-                            "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
-                        img_path = disp.dispatch("fall",fall_bf[tid],ex)
-                        if img_path:
-                            lv,ln,flags=disp._assess_alert_level("fall",ex)
-                            alert_logger.log_sos_event(
-                                event_type="fall",severity=lv,severity_name=ln,
-                                source_id=source_id,source_path=src,location=location,
-                                track_id=tid,image_path=str(img_path),meta_path=None,flags=flags,extra=ex)
-                            # ← NEW: บันทึก critical fall ลง MongoDB
-                            try:
-                                insert_incident(
-                                    event_uuid    = str(uuid.uuid4()),
-                                    event_type    = "fall",
-                                    severity      = lv,          # int จาก _assess_alert_level
-                                    severity_name = ln,          # str จาก _assess_alert_level
-                                    source_id     = source_id,
-                                    location      = location,
-                                    track_id      = tid,
-                                    image_path    = str(img_path),
-                                    extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
-                                )
-                            except Exception as e:
-                                print(f"[DB] critical fall insert error: {e}")
-                        fall_ev[tid]=True
-
-                    # ── Confirmed Fall ────────────────────────────────────
-                    try: imm=cfg.get("danger",{}).get("immobile_seconds",5)
-                    except Exception: imm=5
+                    # ── Critical Fall & Confirmed Fall (dispatch once) ────────
                     esc=fr.get("danger_lying") and not fr.get("recovered_quickly")
-                    if (fr.get("is_fallen") or esc) and not fr.get("recovered_quickly"):
+                    is_critical=fr.get("is_critical") and not fr.get("recovered_quickly")
+                    is_confirmed=(fr.get("is_fallen") or esc) and not fr.get("recovered_quickly")
+
+                    if (is_critical or is_confirmed):
                         if not fall_ev.get(tid):
                             fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
                             fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location,
                                 "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
+                            if is_critical: ex["critical"]=True
                             if esc: ex["auto_escalated_immobile"]=True
                             img_path = disp.dispatch("fall",fall_bf[tid],ex)
                             if img_path:
@@ -420,25 +360,21 @@ def main(src:str, port:int=8081, location:str=""):
                                     event_type="fall",severity=lv,severity_name=ln,
                                     source_id=source_id,source_path=src,location=location,
                                     track_id=tid,image_path=str(img_path),meta_path=None,flags=flags,extra=ex)
-                                # ← NEW: บันทึก confirmed fall ลง MongoDB
                                 try:
                                     insert_incident(
                                         event_uuid    = str(uuid.uuid4()),
                                         event_type    = "fall",
-                                        severity      = lv,          # int จาก _assess_alert_level
-                                        severity_name = ln,          # str จาก _assess_alert_level
+                                        severity      = lv,
+                                        severity_name = ln,
                                         source_id     = source_id,
                                         location      = location,
                                         track_id      = tid,
                                         image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}  # ใส่ conf ไว้ใน extra แทน
+                                        extra         = {**ex, "confidence": conf}
                                     )
                                 except Exception as e:
-                                    print(f"[DB] confirmed fall insert error: {e}")
+                                    print(f"[DB] fall insert error: {e}")
                             fall_ev[tid]=True
-                        else:
-                            if conf>fall_bc.get(tid,0):
-                                fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
                     else:
                         if fall_ev.get(tid):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
