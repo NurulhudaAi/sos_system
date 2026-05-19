@@ -2,7 +2,7 @@ general:
   yolo_model: "../models/yolov8n-pose.pt"
   frame_skip: 1
   person_conf: 0.30
-  detector_url: "http://127.0.0.1:9000"
+  detector_url: "http://127.0.0.1:8000" #8000
 
 fall:
   bbox_ratio_thresh: 1.3
