@@ -1,0 +1,38 @@
+sources:
+  # [B3] แก้ id ให้ unique ทุก source — ป้องกัน multiprocessing spawn 3 ตัว log เดียวกัน
+  # ⚠️  path ใช้ relative จาก project root — วางไฟล์วิดีโอใน videos/ หรือแก้ path ตาม machine
+  - id: "camera_bedroom_1"
+    type: "file"
+    path: "videos/fall1.mp4"
+    port: 8081
+    location: "ห้องนอน"
+    enabled: true
+
+  - id: "camera_bedroom_2"
+    type: "file"
+    path: "videos/hand1.mp4"
+    port: 8082
+    location: "ห้องนอน"
+    enabled: true
+
+  - id: "camera_hallway_1"
+    type: "file"
+    path: "videos/fall3.mp4"
+    port: 8083
+    location: "ห้องโถง"
+    enabled: true
+
+  # RTSP streams (IP cameras) — uncomment to enable
+  # - id: "camera_hallway_rtsp"
+  #   type: "rtsp"
+  #   path: "rtsp://admin:password@192.168.1.100:554/stream1"
+  #   port: 8084
+  #   location: "ห้องโถง"
+  #   enabled: false
+
+  # - id: "camera_entrance_1"
+  #   type: "rtsp"
+  #   path: "rtsp://admin:password@192.168.1.101:554/stream1"
+  #   port: 8085
+  #   location: "ประตูหน้า"
+  #   enabled: false
