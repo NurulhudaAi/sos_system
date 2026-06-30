@@ -40,6 +40,7 @@ def _safe_name(s: str) -> str:
 
 from detectors.fall_detector     import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
+from detectors.pose_sos_detector import PoseSOSDetector  # [FIX Bug 4] เพิ่ม PoseSOSDetector
 from detectors.object_guardian   import ObjectGuardian
 from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
 from help_request_dispatcher     import HelpRequestDispatcher
@@ -156,6 +157,8 @@ def main(src:str, port:int=8081, location:str=""):
     tracker =SimpleTracker()
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
+    pose_d  =PoseSOSDetector(cfg.get("pose_sos",{}))  # [FIX Bug 4]
+    pose_cd =CooldownEngine("pose_sos", cfg.get("pose_sos",{}))  # [FIX Bug 4]
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
     zones   =ZoneManager(str(ROOT / "config/zones.yaml"),"default")  # ใช้ absolute path ป้องกัน cwd ≠ project root
     viz     =Visualizer()
@@ -186,6 +189,8 @@ def main(src:str, port:int=8081, location:str=""):
 
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
+    hand_dispatched: dict[int, bool] = {}  # [FIX Bug 5] ป้องกัน dispatch ซ้ำ
+    pose_ev: dict[int, bool] = {}  # [FIX Bug 4] per-track pose SOS state
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
@@ -262,8 +267,8 @@ def main(src:str, port:int=8081, location:str=""):
                 dropped = set(hand_states.keys()) - active
                 for tid in dropped:
                     tracker.cleanup_track(tid)
-                    for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt]:
+                    for d in [hand_states, hand_dispatched, hand_ev, fall_ev, pose_ev,
+                              hand_bc, hand_bf, hand_bt, fall_bc, fall_bf, fall_bt]:
                         d.pop(tid, None)
 
             if boxes and kpts and kpts.data:
@@ -305,6 +310,8 @@ def main(src:str, port:int=8081, location:str=""):
                     # [B2] ใช้ per-track state แทน hand_d._state ซึ่งเป็น global
                     hs = hand_states.get(tid, 0)
                     hdet = False
+                    best_hand_dist = None  # [FIX Bug 3] เก็บมือที่ใกล้ที่สุด
+                    best_hand_lm = None    # [FIX Bug 3]
                     try:
                         rh=getattr(hand_d,"_results",None)
                         if rh and getattr(rh,"hand_landmarks",None):
@@ -316,28 +323,38 @@ def main(src:str, port:int=8081, location:str=""):
                                 hx=sum(p[0] for p in pts)/len(pts)
                                 hy=sum(p[1] for p in pts)/len(pts)
                                 if x1<=hx<=x2 and y1<=hy<=y2:
-                                    hdet=True
-                                    try:
-                                        if hs==0 and hand_d._palm_open(hl): hs=1
-                                        elif hs==1 and hand_d._thumb_in(hl): hs=2
-                                        elif hs==2 and hand_d._fingers_closed(hl): hs=3
-                                    except Exception: pass
-                                    break
+                                    # [FIX Bug 3] เลือกมือที่ centroid ใกล้ center ของ person bbox ที่สุด
+                                    pcx=(x1+x2)/2; pcy=(y1+y2)/2
+                                    dist=((hx-pcx)**2+(hy-pcy)**2)**0.5
+                                    if best_hand_dist is None or dist<best_hand_dist:
+                                        best_hand_dist=dist; best_hand_lm=hl
                     except Exception: pass
-                    if not hdet: hs=max(0,hs-1)
+                    # [FIX Bug 3] ใช้ best_hand_lm ที่เลือกแล้ว
+                    if best_hand_lm is not None:
+                        hdet = True
+                        try:
+                            # [FIX Bug 2] validate ว่า step ก่อนหน้ายังเป็นจริงอยู่
+                            if hs==0 and hand_d._palm_open(best_hand_lm): hs=1
+                            elif hs==1 and hand_d._palm_open(best_hand_lm) and hand_d._thumb_in(best_hand_lm): hs=2
+                            elif hs==2 and hand_d._thumb_in(best_hand_lm) and hand_d._fingers_closed(best_hand_lm): hs=3
+                            elif hs>0 and not hand_d._palm_open(best_hand_lm) and not hand_d._thumb_in(best_hand_lm): hs=0
+                        except Exception: pass
+                    if not hdet: hs=0  # [FIX Bug 1] reset ทันทีเมื่อไม่เจอมือ (เดิม: hs=max(0,hs-1))
                     hand_states[tid]=hs  # [B2] เก็บ state per-track
 
-                    if hs==3 and not fall_ev.get(tid):
+                    # [FIX Bug 5] dispatch ครั้งเดียว → lock จนกว่า hs กลับเป็น 0
+                    if hs==0:
+                        hand_dispatched[tid]=False
+                    if hs==3 and not fall_ev.get(tid) and not hand_dispatched.get(tid):
                         if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
                             hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
                         hand_ev[tid]=True
-                    elif hand_ev.get(tid):
+                    elif hand_ev.get(tid) and not hand_dispatched.get(tid):
                         if hand_bf.get(tid) is not None:
                             hand_bf[tid] = add_sos_badge(hand_bf[tid], "hand_sos", location, hand_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location}
                             img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
                             if img_path:
-                                # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
                                         event_uuid    = str(uuid.uuid4()),
@@ -353,6 +370,7 @@ def main(src:str, port:int=8081, location:str=""):
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
                         hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
+                        hand_dispatched[tid]=True  # [FIX Bug 5] lock dispatch
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
@@ -388,7 +406,9 @@ def main(src:str, port:int=8081, location:str=""):
                             img_path = disp.dispatch("fall",fall_bf[tid],ex)
                             if img_path:
                                 lv,ln,flags=disp._assess_alert_level("fall",ex)
-                                # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
+                                # [FIX Bug 6] NOTE: ถ้าอนาคตเพิ่ม db= ให้ AlertDispatcher
+                                # จะเกิด double insert เพราะ disp.dispatch() ก็เรียก
+                                # self.db.insert_incident() อยู่แล้ว — ต้องเลือกที่เดียว
                                 try:
                                     insert_incident(
                                         event_uuid    = str(uuid.uuid4()),
@@ -407,6 +427,38 @@ def main(src:str, port:int=8081, location:str=""):
                     else:
                         if fall_ev.get(tid):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
+
+                    # ── Pose SOS (Arm Raise) ──────────────────────────────
+                    # [FIX Bug 4] ใช้ PoseSOSDetector ตรวจจับการยกมือขอความช่วยเหลือ
+                    try:
+                        pr = pose_d.detect(kp, h)
+                        if pose_cd.update(pr.get("is_sos", False)):
+                            if not pose_ev.get(tid):
+                                pose_frame = add_sos_badge(raw.copy(), "pose_sos", location, now_time)
+                                ex_pose = {"track_id":tid, "source":source_id, "location":location,
+                                           "left_arm_up": pr.get("left_arm_up"),
+                                           "right_arm_up": pr.get("right_arm_up")}
+                                img_path = disp.dispatch("hand_sos", pose_frame, ex_pose)  # reuse hand_sos type
+                                if img_path:
+                                    try:
+                                        insert_incident(
+                                            event_uuid    = str(uuid.uuid4()),
+                                            event_type    = "pose_sos",
+                                            severity      = 1,
+                                            severity_name = "MED",
+                                            source_id     = source_id,
+                                            location      = location,
+                                            track_id      = tid,
+                                            image_path    = str(img_path),
+                                            extra         = ex_pose
+                                        )
+                                    except Exception as e:
+                                        print(f"[DB] pose_sos insert error: {e}")
+                                pose_ev[tid] = True
+                        else:
+                            pose_ev[tid] = False
+                    except Exception:
+                        pass
 
             viz.fps(frame)
 

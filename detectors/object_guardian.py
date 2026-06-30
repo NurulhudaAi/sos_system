@@ -24,6 +24,7 @@ class ObjectGuardian:
         self.theft_seconds      = cfg.get("theft_seconds", 10)
         self.min_confidence     = cfg.get("min_confidence", 0.4)
         self.iou_threshold      = cfg.get("iou_threshold", 0.4)
+        self.object_match_iou   = cfg.get("object_match_iou", 0.3)  # [FIX Issue 7] IOU threshold for re-matching objects
 
         # state
         self._tracked: Dict[str, dict] = {}   # object_key → state
@@ -45,6 +46,26 @@ class ObjectGuardian:
             if self._iou(bbox, p["bbox"]) > self.iou_threshold:
                 return True
         return False
+
+    # ─── Object key matching ─────────────────────────────────────────────────
+
+    def _find_existing_key(self, class_name: str, bbox) -> Optional[str]:
+        """[FIX Issue 7] Find an existing tracked object of the same class
+        whose bbox overlaps with the new detection (IOU > object_match_iou).
+        Returns the existing key if found, or None to create a new one.
+        This prevents key drift when bbox shifts by a few pixels between frames."""
+        best_key = None
+        best_iou = 0.0
+        for key, state in self._tracked.items():
+            if state["class_name"] != class_name:
+                continue
+            iou = self._iou(bbox, state["bbox"])
+            if iou > best_iou:
+                best_iou = iou
+                best_key = key
+        if best_iou >= self.object_match_iou:
+            return best_key
+        return None
 
     # ─── Snapshot ────────────────────────────────────────────────────────────
 
@@ -83,7 +104,11 @@ class ObjectGuardian:
 
             bbox       = obj.get("bbox", [0, 0, 0, 0])
             class_name = obj.get("class_name", "object")
-            key        = f"{class_name}_{int(bbox[0])}_{int(bbox[1])}"
+            # [FIX Issue 7] Use IOU matching instead of exact-pixel key
+            # This prevents key drift when bbox shifts a few pixels between frames
+            key = self._find_existing_key(class_name, bbox)
+            if key is None:
+                key = f"{class_name}_{id(obj)}_{int(time.time()*1000)}"
             seen_keys.add(key)
 
             nearby = self._person_nearby(bbox, people)

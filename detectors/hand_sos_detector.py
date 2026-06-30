@@ -23,6 +23,7 @@ class HandSOSDetector:
     def __init__(self, cfg):
         self._results = None
         self._enabled = False
+        self._thumb_ratio = cfg.get("thumb_in_ratio", 0.55)  # [FIX Issue 8] configurable
         try:
             model_path = self._download_hand_model()
             base_opts  = mp_python.BaseOptions(model_asset_path=model_path)
@@ -57,11 +58,22 @@ class HandSOSDetector:
         return str(path)
 
     def _palm_open(self, lm):
-        return all(lm[t].y < lm[p].y for t,p in zip([8,12,16,20],[6,10,14,18]))
+        # [FIX Issue 9] Primary: fingertip above PIP joint (hand facing camera)
+        y_check = all(lm[t].y < lm[p].y for t,p in zip([8,12,16,20],[6,10,14,18]))
+        if y_check:
+            return True
+        # Fallback: distance-based check for side-facing hands
+        # fingertip-to-MCP distance > PIP-to-MCP distance × 1.3 means finger is extended
+        extended = sum(
+            1 for t, m, p in zip([8,12,16,20], [5,9,13,17], [6,10,14,18])
+            if ((lm[t].x-lm[m].x)**2 + (lm[t].y-lm[m].y)**2)**0.5 >
+               ((lm[p].x-lm[m].x)**2 + (lm[p].y-lm[m].y)**2)**0.5 * 1.3
+        )
+        return extended >= 3  # อย่างน้อย 3 ใน 4 นิ้วยืดออก
 
     def _thumb_in(self, lm):
         px = (lm[5].x + lm[17].x) / 2
-        return abs(lm[4].x - px) < abs(lm[12].x - px) * 0.55
+        return abs(lm[4].x - px) < abs(lm[12].x - px) * self._thumb_ratio  # [FIX Issue 8]
 
     def _fingers_closed(self, lm):
         return all(lm[t].y > lm[m].y for t,m in zip([8,12,16,20],[5,9,13,17]))
