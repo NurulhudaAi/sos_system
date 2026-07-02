@@ -17,7 +17,7 @@ sources:
 
   - id: "camera_hallway_1"
     type: "file"
-    path: "videos/fall3.mp4"
+    path: "videos/fall2.mp4"
     port: 8083
     location: "ห้องโถง"
     enabled: true
