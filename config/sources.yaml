@@ -6,6 +6,7 @@ sources:
     path: "videos/fall1.mp4"
     port: 8081
     location: "ห้องนอน"
+    zone_id: "Bedroom-1"          # PRD zone identifier
     enabled: true
 
   - id: "camera_bedroom_2"
@@ -13,6 +14,7 @@ sources:
     path: "videos/hand1.mp4"
     port: 8082
     location: "ห้องนอน"
+    zone_id: "Bedroom-1"          # PRD zone identifier
     enabled: true
 
   - id: "camera_hallway_1"
@@ -20,6 +22,7 @@ sources:
     path: "videos/fall3.mp4"
     port: 8083
     location: "ห้องโถง"
+    zone_id: "Hallway-1"          # PRD zone identifier
     enabled: true
 
   # RTSP streams (IP cameras) — uncomment to enable
@@ -28,6 +31,7 @@ sources:
   #   path: "rtsp://admin:password@192.168.1.100:554/stream1"
   #   port: 8084
   #   location: "ห้องโถง"
+  #   zone_id: "Hallway-1"
   #   enabled: false
 
   # - id: "camera_entrance_1"
@@ -35,4 +39,5 @@ sources:
   #   path: "rtsp://admin:password@192.168.1.101:554/stream1"
   #   port: 8085
   #   location: "ประตูหน้า"
+  #   zone_id: "Entrance-1"
   #   enabled: false

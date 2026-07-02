@@ -48,6 +48,7 @@ from utils                       import preprocess, Visualizer, add_sos_badge
 from vlc_stream                  import VLCStreamManager
 from alert_logger                import alert_logger
 from database                    import insert_incident, insert_object_event, insert_help_request  # [W6] ลบ _get_db ที่ไม่ใช้
+from event_bridge                import get_bridge
 
 cfg         = yaml.safe_load((ROOT / "config/thresholds.yaml").read_text())
 GEN         = cfg.get("general", {})
@@ -122,30 +123,68 @@ def _api(endpoint, frame, timeout=5):
     except Exception: pass
     return {}
 
-def main(src:str, port:int=8081, location:str=""):
-    source_id=str(Path(src).resolve()) if Path(src).exists() else str(src)
+def main(src: str, port: int = 8081, location: str = "", zone_id: str = ""):
+    source_id = str(Path(src).resolve()) if Path(src).exists() else str(src)
 
-    vlc_mgr=None
+    vlc_mgr = None
+    url = None
+    cap = None
+
+    # Determine source type and attempt appropriate video capture method
     if src.startswith("http") or src.startswith("rtsp"):
-        url=src
+        # Network stream – use VLC manager as before
+        url = src
     else:
-        vlc_mgr=VLCStreamManager(src=src,width=W,height=H,fps=SAMPLING_FPS,port=port)
+        vlc_mgr = VLCStreamManager(src=src, width=W, height=H, fps=SAMPLING_FPS, port=port)
         try:
-            url=vlc_mgr.start()
+            url = vlc_mgr.start()
         except RuntimeError as e:
             print(f"\n❌ [VLC] ERROR: {e}")
             import traceback
             traceback.print_exc()
             return
-
         print(f"[VLC] Waiting for stream at {url} ...")
         for attempt in range(10):
             if vlc_mgr.health_check():
-                print(f"[VLC] Stream confirmed ready (attempt {attempt+1})")
-                break
-            time.sleep(1)
+        # Try direct OpenCV capture for local file first
+        direct_cap = cv2.VideoCapture(src)
+        if direct_cap.isOpened():
+            print(f"[Direct] Using direct OpenCV capture for {src}")
+            cap = direct_cap
+            url = src
         else:
-            print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
+            vlc_mgr = VLCStreamManager(src=src, width=W, height=H, fps=SAMPLING_FPS, port=port)
+            try:
+                url = vlc_mgr.start()
+            except RuntimeError as e:
+                print(f"\n❌ [VLC] ERROR: {e}")
+                import traceback
+                traceback.print_exc()
+                return
+            print(f"[VLC] Waiting for stream at {url} ...")
+            # Try direct OpenCV capture for local file first
+            direct_cap = cv2.VideoCapture(src)
+            if direct_cap.isOpened():
+                print(f"[Direct] Using direct OpenCV capture for {src}")
+                cap = direct_cap
+                url = src
+            else:
+                vlc_mgr = VLCStreamManager(src=src, width=W, height=H, fps=SAMPLING_FPS, port=port)
+                try:
+                    url = vlc_mgr.start()
+                except RuntimeError as e:
+                    print(f"\n❌ [VLC] ERROR: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return
+                print(f"[VLC] Waiting for stream at {url} ...")
+                for attempt in range(10):
+                    if vlc_mgr.health_check():
+                        print(f"[VLC] Stream confirmed ready (attempt {attempt+1})")
+                        break
+                    time.sleep(1)
+                else:
+                    print("⚠️  [VLC] Stream not responding after 10s — continuing anyway")
 
     cap=cv2.VideoCapture(url)
     if not cap.isOpened():
@@ -186,6 +225,9 @@ def main(src:str, port:int=8081, location:str=""):
         enforce_one_per_file=GEN.get("one_alert_per_file",False),
         snapshot_dir=snapshot_dir,
         help_dispatcher=help_disp)
+
+    # ── EventBridge (PRD schema adapter) ──────────────────────────────
+    event_bridge = get_bridge()
 
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
@@ -356,17 +398,18 @@ def main(src:str, port:int=8081, location:str=""):
                             img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
                             if img_path:
                                 try:
-                                    insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "hand_sos",
-                                        severity      = 2,
-                                        severity_name = "HIGH",
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
-                                    )
+                                    event_bridge.emit_detection({
+                                        "event_type":    "hand_sos",
+                                        "severity":      2,
+                                        "severity_name": "HIGH",
+                                        "source_id":     source_id,
+                                        "location":      location,
+                                        "zone_id":       zone_id,
+                                        "track_id":      tid,
+                                        "image_path":    str(img_path),
+                                        "confidence":    conf,
+                                        "extra":         ex,
+                                    })
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
                         hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
@@ -410,17 +453,19 @@ def main(src:str, port:int=8081, location:str=""):
                                 # จะเกิด double insert เพราะ disp.dispatch() ก็เรียก
                                 # self.db.insert_incident() อยู่แล้ว — ต้องเลือกที่เดียว
                                 try:
-                                    insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "fall",
-                                        severity      = lv,
-                                        severity_name = ln,
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
-                                    )
+                                    event_bridge.emit_detection({
+                                        "event_type":    "fall",
+                                        "severity":      lv,
+                                        "severity_name": ln,
+                                        "source_id":     source_id,
+                                        "location":      location,
+                                        "zone_id":       zone_id,
+                                        "track_id":      tid,
+                                        "image_path":    str(img_path),
+                                        "confidence":    conf,
+                                        "flags":         flags,
+                                        "extra":         ex,
+                                    })
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
                             fall_ev[tid]=True
@@ -441,17 +486,18 @@ def main(src:str, port:int=8081, location:str=""):
                                 img_path = disp.dispatch("hand_sos", pose_frame, ex_pose)  # reuse hand_sos type
                                 if img_path:
                                     try:
-                                        insert_incident(
-                                            event_uuid    = str(uuid.uuid4()),
-                                            event_type    = "pose_sos",
-                                            severity      = 1,
-                                            severity_name = "MED",
-                                            source_id     = source_id,
-                                            location      = location,
-                                            track_id      = tid,
-                                            image_path    = str(img_path),
-                                            extra         = ex_pose
-                                        )
+                                        event_bridge.emit_detection({
+                                            "event_type":    "pose_sos",
+                                            "severity":      1,
+                                            "severity_name": "MED",
+                                            "source_id":     source_id,
+                                            "location":      location,
+                                            "zone_id":       zone_id,
+                                            "track_id":      tid,
+                                            "image_path":    str(img_path),
+                                            "confidence":    0.0,
+                                            "extra":         ex_pose,
+                                        })
                                     except Exception as e:
                                         print(f"[DB] pose_sos insert error: {e}")
                                 pose_ev[tid] = True
@@ -470,7 +516,7 @@ def main(src:str, port:int=8081, location:str=""):
         print(f"[{source_id[-30:]}] Done.")
 
 def run_source(s):
-    try: main(s["path"],s.get("port",8081),s.get("location",""))
+    try: main(s["path"],s.get("port",8081),s.get("location",""),s.get("zone_id",""))
     except Exception as e: print(f"[run_source] {s.get('id')} error: {e}")
 
 if __name__=="__main__":
