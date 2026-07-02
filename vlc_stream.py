@@ -68,7 +68,9 @@ class VLCStreamManager:
         cmd = [
             vlc_bin, "-I", "dummy",
             "--no-audio",
-            "--loop",
+            "--repeat",
+            "--input-repeat=65535",
+            "--no-video-title-show",
             input_src,
             f"--sout={sout}",
             "--sout-keep",

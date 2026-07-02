@@ -192,22 +192,44 @@ def main(src:str, port:int=8081, location:str=""):
     s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
                                   "motion_hist":deque(maxlen=TRIG_FRAMES),
                                   "triggered":False,"trigger_time":None,"frames_in_trigger":0})
+    retry_count = 0
+    max_retries = 10
     n=0
     try:
         while True:
             ret,raw=cap.read()
             if not ret:
+                retry_count += 1
+                if retry_count > max_retries:
+                    print(f"⚠️  [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
+                    break
+                # VLC process died — restart it
                 if vlc_mgr and not vlc_mgr.is_alive():
-                    print(f"⚠️  [VLC] Process died — restarting ...")
+                    print(f"⚠️  [VLC] Process died — restarting (attempt {retry_count}/{max_retries}) ...")
                     try:
-                        url = vlc_mgr.restart()
                         cap.release()
+                        url = vlc_mgr.restart()
                         time.sleep(3)
                         cap = cv2.VideoCapture(url)
+                        if not cap.isOpened():
+                            print(f"[cap] Still cannot open after VLC restart: {url}")
+                            time.sleep(2)
+                            continue
+                        print(f"[cap] Reconnected after VLC restart")
+                        retry_count = 0
                     except Exception as restart_err:
                         print(f"❌ [VLC] Restart failed: {restart_err}")
-                        break
-                time.sleep(0.05); continue
+                        time.sleep(2)
+                        continue
+                else:
+                    # Stream gap during loop transition — brief retry
+                    cap.release()
+                    time.sleep(1)
+                    cap = cv2.VideoCapture(url)
+                    if cap.isOpened():
+                        retry_count = 0
+                continue
+            retry_count = 0  # successful read — reset retry counter
             n+=1
             if n%max(1,SKIP)!=0: continue
 
