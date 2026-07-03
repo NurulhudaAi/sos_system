@@ -3,21 +3,21 @@ sources:
   # ⚠️  path ใช้ relative จาก project root — วางไฟล์วิดีโอใน videos/ หรือแก้ path ตาม machine
   - id: "camera_bedroom_1"
     type: "file"
-    path: "videos/fall1.mp4"
+    path: "video/fall1.mp4"
     port: 8081
     location: "ห้องนอน"
     enabled: true
 
   - id: "camera_bedroom_2"
     type: "file"
-    path: "videos/hand1.mp4"
+    path: "video/hand1.mp4"
     port: 8082
     location: "ห้องนอน"
     enabled: true
 
   - id: "camera_hallway_1"
     type: "file"
-    path: "videos/fall3.mp4"
+    path: "video/fall2.mp4"
     port: 8083
     location: "ห้องโถง"
     enabled: true
