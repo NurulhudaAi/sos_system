@@ -24,11 +24,11 @@ class ObjectGuardian:
         self.theft_seconds      = cfg.get("theft_seconds", 10)
         self.min_confidence     = cfg.get("min_confidence", 0.4)
         self.iou_threshold      = cfg.get("iou_threshold", 0.4)
-        self.object_match_iou   = cfg.get("object_match_iou", 0.3)  # [FIX Issue 7] IOU threshold for re-matching objects
 
         # state
         self._tracked: Dict[str, dict] = {}   # object_key → state
         self._alerts_sent: set          = set()
+        self._next_key_id: int          = 0   # [FIX] monotonic id for IoU-matched keys
 
     # ─── IOU helper ──────────────────────────────────────────────────────────
 
@@ -47,25 +47,21 @@ class ObjectGuardian:
                 return True
         return False
 
-    # ─── Object key matching ─────────────────────────────────────────────────
-
-    def _find_existing_key(self, class_name: str, bbox) -> Optional[str]:
-        """[FIX Issue 7] Find an existing tracked object of the same class
-        whose bbox overlaps with the new detection (IOU > object_match_iou).
-        Returns the existing key if found, or None to create a new one.
-        This prevents key drift when bbox shifts by a few pixels between frames."""
-        best_key = None
-        best_iou = 0.0
-        for key, state in self._tracked.items():
-            if state["class_name"] != class_name:
+    def _match_existing_key(self, class_name: str, bbox) -> Optional[str]:
+        """[FIX] Find the best-matching already-tracked object of the same
+        class via IoU, so a stationary object keeps its identity (and its
+        first_seen timestamp) across frames despite small detector jitter.
+        Replaces the old exact-pixel-coordinate key."""
+        best_key, best_iou = None, 0.0
+        for key, t in self._tracked.items():
+            if t["class_name"] != class_name:
                 continue
-            iou = self._iou(bbox, state["bbox"])
+            iou = self._iou(bbox, t["bbox"])
             if iou > best_iou:
-                best_iou = iou
-                best_key = key
-        if best_iou >= self.object_match_iou:
-            return best_key
-        return None
+                best_iou, best_key = iou, key
+        # reuse threshold slightly looser than person-nearby threshold since
+        # this is matching the *same physical object*, not proximity
+        return best_key if best_iou >= 0.3 else None
 
     # ─── Snapshot ────────────────────────────────────────────────────────────
 
@@ -104,11 +100,18 @@ class ObjectGuardian:
 
             bbox       = obj.get("bbox", [0, 0, 0, 0])
             class_name = obj.get("class_name", "object")
-            # [FIX Issue 7] Use IOU matching instead of exact-pixel key
-            # This prevents key drift when bbox shifts a few pixels between frames
-            key = self._find_existing_key(class_name, bbox)
+
+            # [FIX] Previously keyed by exact rounded pixel coordinates
+            # (f"{class_name}_{int(bbox[0])}_{int(bbox[1])}"). Any 1px of
+            # detector jitter between frames — normal with YOLO — produced a
+            # brand-new key, so first_seen kept resetting and elapsed never
+            # reached left_behind_seconds/theft_seconds. Now match against
+            # existing tracked objects of the same class via IoU, same
+            # approach as SimpleTracker in main.py.
+            key = self._match_existing_key(class_name, bbox)
             if key is None:
-                key = f"{class_name}_{id(obj)}_{int(time.time()*1000)}"
+                key = f"{class_name}_{self._next_key_id}"
+                self._next_key_id += 1
             seen_keys.add(key)
 
             nearby = self._person_nearby(bbox, people)
@@ -144,6 +147,7 @@ class ObjectGuardian:
                     "class_name":         class_name,
                     "confidence":         conf,
                     "bbox":               bbox,
+                    "track_id":           key,  # [FIX] was missing → object_events.track_id always null
                     "seconds_unattended": elapsed,
                     "source_id":          source_id,
                     "location":           location,
@@ -165,6 +169,7 @@ class ObjectGuardian:
                     "class_name":         class_name,
                     "confidence":         conf,
                     "bbox":               bbox,
+                    "track_id":           key,  # [FIX] was missing → object_events.track_id always null
                     "seconds_unattended": elapsed,
                     "source_id":          source_id,
                     "location":           location,

@@ -36,8 +36,13 @@ class ZoneManager:
         try:
             d = yaml.safe_load(Path(path).read_text())
             self.zones = d["cameras"][cam_id]["zones"]
-        except Exception:
-            pass
+        except Exception as e:
+            # [FIX] previously silent — a bad path or missing cam_id silently
+            # disables zone filtering (in_zone() then returns True for
+            # everything). Now at least visible in logs/console.
+            print(f"⚠️  [ZoneManager] Could not load zones from {path} "
+                  f"(cam_id={cam_id!r}): {e} — zone filtering disabled, "
+                  f"full frame will be used")
 
     def in_zone(self, cx, cy):
         if not self.zones:
@@ -272,34 +277,33 @@ class AlertDispatcher:
         except Exception:
             pass
 
-        # ── MongoDB persist (via EventBridge for PRD schema) ─────────────────
+        # ── MongoDB persist ───────────────────────────────────────────────
+        # [FIX] was calling self.db.insert_sos_event() which does not exist in
+        # database.py (only insert_incident() does) — this branch would have
+        # raised on first use. Corrected to match the real signature.
+        #
+        # NOTE: main.py intentionally does NOT pass db= into AlertDispatcher.
+        # main.py already calls insert_incident() itself right after
+        # dispatch() returns an image path. If db= were wired here too, every
+        # fall/hand_sos event would be written to MongoDB twice (the same
+        # double-write bug fixed earlier for alert_logger.log_sos_event()).
+        # Only pass db= here if you also remove the insert_incident() calls
+        # from main.py.
         if self.db:
             try:
-                from event_bridge import get_bridge
-                bridge = get_bridge()
-
-                source_id   = extra.get("source_id") if isinstance(extra, dict) else None
-                source_path = extra.get("source")    if isinstance(extra, dict) else None
-                track_id    = extra.get("track_id")  if isinstance(extra, dict) else None
-                location    = extra.get("location")  if isinstance(extra, dict) else None
-                zone_id     = extra.get("zone_id")   if isinstance(extra, dict) else None
-                confidence  = extra.get("confidence", 0.0) if isinstance(extra, dict) else 0.0
-
-                bridge.emit_detection({
-                    "event_type":    atype,
-                    "severity":      level,
-                    "severity_name": level_name,
-                    "source_id":     source_id or source_path,
-                    "source_path":   source_path,
-                    "location":      location,
-                    "zone_id":       zone_id,
-                    "track_id":      track_id,
-                    "image_path":    str(path),
-                    "meta_path":     str(path.with_suffix('.json')),
-                    "confidence":    float(confidence) if confidence else 0.0,
-                    "flags":         flags,
-                    "extra":         extra or {},
-                })
+                source_id  = extra.get("source_id") if isinstance(extra, dict) else None
+                source_path = extra.get("source")   if isinstance(extra, dict) else None
+                track_id   = extra.get("track_id")  if isinstance(extra, dict) else None
+                location   = extra.get("location")  if isinstance(extra, dict) else None
+                self.db.insert_incident(
+                    event_uuid=event_uuid, event_type=atype,
+                    severity=level, severity_name=level_name,
+                    source_id=source_id or source_path, source_path=source_path,
+                    location=location, track_id=track_id,
+                    image_path=str(path),
+                    meta_path=str(path.with_suffix('.json')),
+                    flags=flags, extra=extra or {},
+                )
             except Exception as e:
                 self._log.warning(f"MongoDB event insert failed: {e}")
                 print(f"⚠️  MongoDB event insert failed: {e}")
