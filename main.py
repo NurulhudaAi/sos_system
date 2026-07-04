@@ -14,7 +14,7 @@ import uuid  # [W3] top-level
 import cv2, sys, time, yaml, torch, requests, os
 from pathlib import Path
 from collections import defaultdict, deque
-from datetime import datetime, timezone
+from datetime import datetime
 import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
@@ -269,8 +269,7 @@ def main(src:str, port:int=8081, location:str=""):
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused
                     for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines,
-                              s_states]:
+                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines]:
                         d.pop(tid, None)
 
             if boxes and kpts and kpts.data:
@@ -347,23 +346,15 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid     = str(uuid.uuid4()),
-                                        detection_type = "Gesture",
-                                        zone           = location or "Unknown-0",
-                                        confidence     = conf,
-                                        timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                                        severity       = "High",
-                                        metadata       = {
-                                            "cameraId": source_id,
-                                            "personCount": 1,
-                                            "trackId": tid,
-                                            "imagePath": str(img_path),
-                                            "originalEventType": "hand_sos",
-                                            "originalSeverity": 2,
-                                            "originalSeverityName": "HIGH",
-                                            "flags": [],
-                                            "extra": {**ex, "confidence": conf},
-                                        },
+                                        event_uuid    = str(uuid.uuid4()),
+                                        event_type    = "hand_sos",
+                                        severity      = 2,
+                                        severity_name = "HIGH",
+                                        source_id     = source_id,
+                                        location      = location,
+                                        track_id      = tid,
+                                        image_path    = str(img_path),
+                                        extra         = {**ex, "confidence": conf}
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
@@ -395,23 +386,15 @@ def main(src:str, port:int=8081, location:str=""):
                         if img_path:
                             try:
                                 insert_incident(
-                                    event_uuid     = str(uuid.uuid4()),
-                                    detection_type = "Gesture",
-                                    zone           = location or "Unknown-0",
-                                    confidence     = conf,
-                                    timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                                    severity       = "High",
-                                    metadata       = {
-                                        "cameraId": source_id,
-                                        "personCount": 1,
-                                        "trackId": tid,
-                                        "imagePath": str(img_path),
-                                        "originalEventType": "pose_sos",
-                                        "originalSeverity": 2,
-                                        "originalSeverityName": "HIGH",
-                                        "flags": [],
-                                        "extra": {**ex, "confidence": conf},
-                                    },
+                                    event_uuid    = str(uuid.uuid4()),
+                                    event_type    = "pose_sos",
+                                    severity      = 2,
+                                    severity_name = "HIGH",
+                                    source_id     = source_id,
+                                    location      = location,
+                                    track_id      = tid,
+                                    image_path    = str(img_path),
+                                    extra         = {**ex, "confidence": conf}
                                 )
                             except Exception as e:
                                 print(f"[DB] pose_sos insert error: {e}")
@@ -452,25 +435,16 @@ def main(src:str, port:int=8081, location:str=""):
                                 lv,ln,flags=disp._assess_alert_level("fall",ex)
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
-                                    _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
                                     insert_incident(
-                                        event_uuid     = str(uuid.uuid4()),
-                                        detection_type = "Fall",
-                                        zone           = location or "Unknown-0",
-                                        confidence     = conf,
-                                        timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                                        severity       = _sev_map.get(lv, "High"),
-                                        metadata       = {
-                                            "cameraId": source_id,
-                                            "personCount": 1,
-                                            "trackId": tid,
-                                            "imagePath": str(img_path),
-                                            "originalEventType": "fall",
-                                            "originalSeverity": lv,
-                                            "originalSeverityName": ln,
-                                            "flags": flags if isinstance(flags, list) else [],
-                                            "extra": {**ex, "confidence": conf},
-                                        },
+                                        event_uuid    = str(uuid.uuid4()),
+                                        event_type    = "fall",
+                                        severity      = lv,
+                                        severity_name = ln,
+                                        source_id     = source_id,
+                                        location      = location,
+                                        track_id      = tid,
+                                        image_path    = str(img_path),
+                                        extra         = {**ex, "confidence": conf}
                                     )
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
