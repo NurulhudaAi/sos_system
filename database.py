@@ -11,6 +11,7 @@ Schema ตรงกับ PRD Section 10.1 — Incident Collection:
 import os
 import logging
 import threading
+import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List
 
@@ -24,6 +25,7 @@ MONGODB_URI            = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 MONGODB_DB_NAME        = os.getenv("MONGODB_DB_NAME", "iam")
 INCIDENTS_COLLECTION   = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
 SNAPSHOT_SERVER_URL    = os.getenv("SNAPSHOT_SERVER_URL", "http://127.0.0.1:8000")
+SOURCE_EVENTS_COLLECTION = os.getenv("MONGODB_SOURCE_EVENTS_COLLECTION", "source_events")
 
 # ─── Thread-local connection pool (1 client ต่อ thread) ──────────────────────
 _local = threading.local()
@@ -110,7 +112,8 @@ def _create_indexes(db):
         db.object_events.create_index([("source_id", 1), ("created_at", -1)])
         db.help_requests.create_index("event_uuid")
         db.help_requests.create_index([("status", 1), ("sent_at", -1)])
-
+        db[SOURCE_EVENTS_COLLECTION].create_index([("created_at", -1)])
+        db[SOURCE_EVENTS_COLLECTION].create_index([("source_id", 1), ("created_at", -1)])
         logger.info("✅ MongoDB indexes verified (PRD schema)")
     except Exception as e:
         logger.warning(f"⚠️  Index creation warning: {e}")
@@ -289,6 +292,39 @@ def insert_help_request(
         return True
     except Exception as e:
         logger.error(f"❌ Failed to log help request: {e}")
+        return False
+
+
+# ─── Write: Source Status ────────────────────────────────────────────────────
+
+def insert_source_status(
+    source_id: str,
+    source_path: str,
+    location: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    status: str = "connected",
+    port: Optional[int] = None,
+    error: Optional[str] = None,
+) -> bool:
+    """บันทึกสถานะการเชื่อมต่อ source ลง collection แยก เพื่อไม่ปะปนกับ incident FRD"""
+    try:
+        db = _get_db()
+        db[SOURCE_EVENTS_COLLECTION].insert_one({
+            "created_at": _utcnow(),
+            "source_id": source_id,
+            "source_path": source_path,
+            "location": location,
+            "zone_id": zone_id,
+            "status": status,
+            "port": port,
+            "error": error,
+        })
+        logger.info(f"✅ Source status logged in {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
+        print(f"[DB] Source status inserted into {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to log source status: {e}")
+        print(f"[DB] Source status insert failed: {source_id} | {e}")
         return False
 
 

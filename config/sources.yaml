@@ -1,9 +1,9 @@
 sources:
   # [B3] แก้ id ให้ unique ทุก source — ป้องกัน multiprocessing spawn 3 ตัว log เดียวกัน
-  # ⚠️  path ใช้ relative จาก project root — วางไฟล์วิดีโอใน videos/ หรือแก้ path ตาม machine
+  # ⚠️  ใช้ absolute path ของไฟล์วิดีโอจริงบนเครื่องนี้
   - id: "camera_bedroom_1"
     type: "file"
-    path: "video/fall1.mp4"
+    path: "/Users/nurulhudaadamishaq/Downloads/video/fall1.mp4"
     port: 8081
     location: "ห้องนอน"
     zone_id: "Bedroom-1"          # PRD zone identifier
@@ -11,7 +11,7 @@ sources:
 
   - id: "camera_bedroom_2"
     type: "file"
-    path: "video/hand1.mp4"
+    path: "/Users/nurulhudaadamishaq/Downloads/video/fall2.mp4"
     port: 8082
     location: "ห้องนอน"
     zone_id: "Bedroom-1"          # PRD zone identifier
@@ -19,7 +19,7 @@ sources:
 
   - id: "camera_hallway_1"
     type: "file"
-    path: "video/fall3.mp4"
+    path: "/Users/nurulhudaadamishaq/Downloads/video/fall3.mp4"
     port: 8083
     location: "ห้องโถง"
     zone_id: "Hallway-1"          # PRD zone identifier

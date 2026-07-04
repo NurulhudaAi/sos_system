@@ -47,7 +47,7 @@ from help_request_dispatcher     import HelpRequestDispatcher
 from utils                       import preprocess, Visualizer, add_sos_badge
 from vlc_stream                  import VLCStreamManager
 from alert_logger                import alert_logger
-from database                    import insert_incident, insert_object_event, insert_help_request  # [W6] ลบ _get_db ที่ไม่ใช้
+from database                    import insert_incident, insert_object_event, insert_help_request, insert_source_status  # [W6] ลบ _get_db ที่ไม่ใช้
 from event_bridge                import get_bridge
 
 cfg         = yaml.safe_load((ROOT / "config/thresholds.yaml").read_text())
@@ -123,7 +123,14 @@ def _api(endpoint, frame, timeout=5):
     except Exception: pass
     return {}
 
+def _resolve_source_path(src: str) -> str:
+    path = Path(src).expanduser()
+    if path.exists():
+        return str(path)
+    return str(path)
+
 def main(src: str, port: int = 8081, location: str = "", zone_id: str = ""):
+    src = _resolve_source_path(src)
     source_id = str(Path(src).resolve()) if Path(src).exists() else str(src)
 
     vlc_mgr = None
@@ -135,18 +142,9 @@ def main(src: str, port: int = 8081, location: str = "", zone_id: str = ""):
         # Network stream – use VLC manager as before
         url = src
     else:
-        vlc_mgr = VLCStreamManager(src=src, width=W, height=H, fps=SAMPLING_FPS, port=port)
-        try:
-            url = vlc_mgr.start()
-        except RuntimeError as e:
-            print(f"\n❌ [VLC] ERROR: {e}")
-            import traceback
-            traceback.print_exc()
+        if not Path(src).exists():
+            print(f"[source] Missing video file: {src}")
             return
-        print(f"[VLC] Waiting for stream at {url} ...")
-        for attempt in range(10):
-            if vlc_mgr.health_check():
-        # Try direct OpenCV capture for local file first
         direct_cap = cv2.VideoCapture(src)
         if direct_cap.isOpened():
             print(f"[Direct] Using direct OpenCV capture for {src}")
@@ -162,36 +160,32 @@ def main(src: str, port: int = 8081, location: str = "", zone_id: str = ""):
                 traceback.print_exc()
                 return
             print(f"[VLC] Waiting for stream at {url} ...")
-            # Try direct OpenCV capture for local file first
-            direct_cap = cv2.VideoCapture(src)
-            if direct_cap.isOpened():
-                print(f"[Direct] Using direct OpenCV capture for {src}")
-                cap = direct_cap
-                url = src
+            for attempt in range(10):
+                if vlc_mgr.health_check():
+                    print(f"[VLC] Stream confirmed ready (attempt {attempt + 1})")
+                    break
+                time.sleep(1)
             else:
-                vlc_mgr = VLCStreamManager(src=src, width=W, height=H, fps=SAMPLING_FPS, port=port)
-                try:
-                    url = vlc_mgr.start()
-                except RuntimeError as e:
-                    print(f"\n❌ [VLC] ERROR: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    return
-                print(f"[VLC] Waiting for stream at {url} ...")
-                for attempt in range(10):
-                    if vlc_mgr.health_check():
-                        print(f"[VLC] Stream confirmed ready (attempt {attempt+1})")
-                        break
-                    time.sleep(1)
-                else:
-                    print("⚠️  [VLC] Stream not responding after 10s — continuing anyway")
+                print("⚠️  [VLC] Stream not responding after 10s — continuing anyway")
 
-    cap=cv2.VideoCapture(url)
+    if cap is None:
+        cap = cv2.VideoCapture(url)
     if not cap.isOpened():
         print(f"[cap] Cannot open: {url}")
         if vlc_mgr: vlc_mgr.stop(); return
 
     print(f"[{source_id[-30:]}] Connected | location={location or '?'}")
+    try:
+        insert_source_status(
+            source_id=source_id,
+            source_path=src,
+            location=location,
+            zone_id=zone_id,
+            status="connected",
+            port=port,
+        )
+    except Exception as e:
+        print(f"[DB] source status insert error: {e}")
 
     tracker =SimpleTracker()
     fall_d  =FallDetector(cfg.get("fall",{}))
