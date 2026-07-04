@@ -338,15 +338,24 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "hand_sos",
-                                        severity      = 2,
-                                        severity_name = "HIGH",
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Gesture",
+                                        zone           = zones.get_zone_id((x1+x2)/2/w, (y1+y2)/2/h) if hasattr(zones, 'get_zone_id') else location,
+                                        confidence     = conf,
+                                        timestamp      = datetime.now(tz=None).isoformat() + "Z",
+                                        severity       = "High",
+                                        metadata       = {
+                                            "cameraId":          source_id,
+                                            "personCount":       1,
+                                            "trackId":           tid,
+                                            "imagePath":         str(img_path),
+                                            "snapshotUrl":       None,
+                                            "originalEventType": "hand_sos",
+                                            "originalSeverity":  2,
+                                            "originalSeverityName": "HIGH",
+                                            "flags":             [],
+                                            "extra":             {**ex, "confidence": conf},
+                                        },
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
@@ -388,16 +397,27 @@ def main(src:str, port:int=8081, location:str=""):
                                 lv,ln,flags=disp._assess_alert_level("fall",ex)
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
+                                    # Map severity int → PRD string
+                                    _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "fall",
-                                        severity      = lv,
-                                        severity_name = ln,
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Fall",
+                                        zone           = zones.get_zone_id((x1+x2)/2/w, (y1+y2)/2/h) if hasattr(zones, 'get_zone_id') else location,
+                                        confidence     = conf,
+                                        timestamp      = datetime.now(tz=None).isoformat() + "Z",
+                                        severity       = _sev_map.get(lv, "High"),
+                                        metadata       = {
+                                            "cameraId":          source_id,
+                                            "personCount":       1,
+                                            "trackId":           tid,
+                                            "imagePath":         str(img_path),
+                                            "snapshotUrl":       None,
+                                            "originalEventType": "fall",
+                                            "originalSeverity":  lv,
+                                            "originalSeverityName": ln,
+                                            "flags":             flags if isinstance(flags, list) else [],
+                                            "extra":             {**ex, "confidence": conf},
+                                        },
                                     )
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
