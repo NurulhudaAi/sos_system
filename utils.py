@@ -120,6 +120,7 @@ def add_sos_badge(frame, event_type: str, location: str = "", time_str: str = ""
         "fall_warning": "FALL WARNING",
         "fall":         "FALL DETECTED",
         "hand_sos":     "SILENT SOS HAND",
+        "pose_sos":     "SOS ARM RAISE",  # [FIX] added — was falling back to generic "ALERT"
     }
     label = labels.get(event_type, "ALERT")
 

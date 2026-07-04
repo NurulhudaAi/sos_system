@@ -41,6 +41,7 @@ def _safe_name(s: str) -> str:
 from detectors.fall_detector     import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
 from detectors.object_guardian   import ObjectGuardian
+from detectors.pose_sos_detector import PoseSOSDetector  # [FIX] was defined but never wired in
 from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
 from help_request_dispatcher     import HelpRequestDispatcher
 from utils                       import preprocess, Visualizer, add_sos_badge
@@ -157,6 +158,7 @@ def main(src:str, port:int=8081, location:str=""):
     tracker =SimpleTracker()
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
+    pose_d  =PoseSOSDetector(cfg.get("pose_sos",{}))  # [FIX] wired in — was unused before
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
     zones   =ZoneManager(str(ROOT / "config/zones.yaml"), "default")  # [FIX] ROOT-anchored
     viz     =Visualizer()
@@ -173,7 +175,8 @@ def main(src:str, port:int=8081, location:str=""):
 
     disp=AlertDispatcher(
         cooldowns={"fall":cfg.get("fall",{}).get("cooldown_seconds",alert_cd),
-                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)},
+                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd),
+                   "pose_sos":cfg.get("pose_sos",{}).get("cooldown_seconds",alert_cd)},  # [FIX] added
         default_cooldown=alert_cd,
         enforce_one_per_file=GEN.get("one_alert_per_file",False),
         snapshot_dir=snapshot_dir,
@@ -181,6 +184,11 @@ def main(src:str, port:int=8081, location:str=""):
 
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
+    # [FIX] one CooldownEngine per track for pose SOS temporal confirmation —
+    # PoseSOSDetector.detect() is a single-frame check with no memory, so it
+    # needs the same temporal_window/temporal_threshold smoothing that
+    # thresholds.yaml's pose_sos: section already defines but nothing used.
+    pose_engines: dict[int, CooldownEngine] = {}
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
@@ -261,7 +269,7 @@ def main(src:str, port:int=8081, location:str=""):
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused
                     for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt]:
+                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines]:
                         d.pop(tid, None)
 
             if boxes and kpts and kpts.data:
@@ -340,26 +348,72 @@ def main(src:str, port:int=8081, location:str=""):
                                     insert_incident(
                                         event_uuid     = str(uuid.uuid4()),
                                         detection_type = "Gesture",
-                                        zone           = zones.get_zone_id((x1+x2)/2/w, (y1+y2)/2/h) if hasattr(zones, 'get_zone_id') else location,
+                                        zone           = location or "Unknown-0",
                                         confidence     = conf,
-                                        timestamp      = datetime.now(tz=None).isoformat() + "Z",
+                                        timestamp      = datetime.utcnow().isoformat() + "Z",
                                         severity       = "High",
                                         metadata       = {
-                                            "cameraId":          source_id,
-                                            "personCount":       1,
-                                            "trackId":           tid,
-                                            "imagePath":         str(img_path),
-                                            "snapshotUrl":       None,
+                                            "cameraId": source_id,
+                                            "personCount": 1,
+                                            "trackId": tid,
+                                            "imagePath": str(img_path),
                                             "originalEventType": "hand_sos",
-                                            "originalSeverity":  2,
+                                            "originalSeverity": 2,
                                             "originalSeverityName": "HIGH",
-                                            "flags":             [],
-                                            "extra":             {**ex, "confidence": conf},
+                                            "flags": [],
+                                            "extra": {**ex, "confidence": conf},
                                         },
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
                         hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
+
+                    # ── Pose SOS (arm raise) ──────────────────────────────
+                    # [FIX] PoseSOSDetector existed with its own config block
+                    # in thresholds.yaml (pose_sos:) and CooldownEngine was
+                    # already imported at the top of this file, but neither
+                    # was ever wired into the detection loop — arm-raise SOS
+                    # was silently not detected at all.
+                    try:
+                        pr = pose_d.detect(kp, h)
+                    except Exception:
+                        pr = {"is_sos": False}
+
+                    if tid not in pose_engines:
+                        pose_engines[tid] = CooldownEngine("pose_sos", cfg.get("pose_sos", {}))
+                    pose_confirmed = pose_engines[tid].update(bool(pr.get("is_sos")))
+
+                    if pose_confirmed and not fall_ev.get(tid):
+                        badge_frame = add_sos_badge(raw.copy(), "pose_sos", location, now_time)
+                        ex = {
+                            "track_id": tid, "source": source_id, "location": location,
+                            "left_arm_up": pr.get("left_arm_up"),
+                            "right_arm_up": pr.get("right_arm_up"),
+                        }
+                        img_path = disp.dispatch("pose_sos", badge_frame, ex)
+                        if img_path:
+                            try:
+                                insert_incident(
+                                    event_uuid     = str(uuid.uuid4()),
+                                    detection_type = "Gesture",
+                                    zone           = location or "Unknown-0",
+                                    confidence     = conf,
+                                    timestamp      = datetime.utcnow().isoformat() + "Z",
+                                    severity       = "High",
+                                    metadata       = {
+                                        "cameraId": source_id,
+                                        "personCount": 1,
+                                        "trackId": tid,
+                                        "imagePath": str(img_path),
+                                        "originalEventType": "pose_sos",
+                                        "originalSeverity": 2,
+                                        "originalSeverityName": "HIGH",
+                                        "flags": [],
+                                        "extra": {**ex, "confidence": conf},
+                                    },
+                                )
+                            except Exception as e:
+                                print(f"[DB] pose_sos insert error: {e}")
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
@@ -397,26 +451,24 @@ def main(src:str, port:int=8081, location:str=""):
                                 lv,ln,flags=disp._assess_alert_level("fall",ex)
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
-                                    # Map severity int → PRD string
                                     _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
                                     insert_incident(
                                         event_uuid     = str(uuid.uuid4()),
                                         detection_type = "Fall",
-                                        zone           = zones.get_zone_id((x1+x2)/2/w, (y1+y2)/2/h) if hasattr(zones, 'get_zone_id') else location,
+                                        zone           = location or "Unknown-0",
                                         confidence     = conf,
-                                        timestamp      = datetime.now(tz=None).isoformat() + "Z",
+                                        timestamp      = datetime.utcnow().isoformat() + "Z",
                                         severity       = _sev_map.get(lv, "High"),
                                         metadata       = {
-                                            "cameraId":          source_id,
-                                            "personCount":       1,
-                                            "trackId":           tid,
-                                            "imagePath":         str(img_path),
-                                            "snapshotUrl":       None,
+                                            "cameraId": source_id,
+                                            "personCount": 1,
+                                            "trackId": tid,
+                                            "imagePath": str(img_path),
                                             "originalEventType": "fall",
-                                            "originalSeverity":  lv,
+                                            "originalSeverity": lv,
                                             "originalSeverityName": ln,
-                                            "flags":             flags if isinstance(flags, list) else [],
-                                            "extra":             {**ex, "confidence": conf},
+                                            "flags": flags if isinstance(flags, list) else [],
+                                            "extra": {**ex, "confidence": conf},
                                         },
                                     )
                                 except Exception as e:
