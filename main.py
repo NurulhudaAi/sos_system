@@ -269,7 +269,8 @@ def main(src:str, port:int=8081, location:str=""):
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused
                     for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines]:
+                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines,
+                              s_states]:
                         d.pop(tid, None)
 
             if boxes and kpts and kpts.data:
