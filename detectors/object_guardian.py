@@ -7,7 +7,7 @@ import cv2
 import time
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class ObjectGuardian:
 
     def _save_snapshot(self, frame, label: str) -> Optional[str]:
         try:
-            ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            ts   = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             path = self.alert_dir / f"{label}_{ts}.jpg"
             cv2.imwrite(str(path), frame)
             return str(path)
@@ -152,7 +152,7 @@ class ObjectGuardian:
                     "source_id":          source_id,
                     "location":           location,
                     "image_path":         img_path,
-                    "timestamp":          datetime.utcnow().isoformat(),
+                    "timestamp":          datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "alert_raised":       True,
                 })
                 t["alert_sent"] = True
@@ -174,7 +174,7 @@ class ObjectGuardian:
                     "source_id":          source_id,
                     "location":           location,
                     "image_path":         img_path,
-                    "timestamp":          datetime.utcnow().isoformat(),
+                    "timestamp":          datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     "alert_raised":       True,
                 })
                 t["alert_sent"] = True

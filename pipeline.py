@@ -1,7 +1,7 @@
 import cv2, yaml, time, logging, requests, threading, os, json, uuid
 from pathlib import Path
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 ALERT_DIR = Path("alerts")
@@ -303,7 +303,7 @@ class AlertDispatcher:
                     detection_type = _det_type_map.get(atype, "Fall"),
                     zone           = location or "Unknown-0",
                     confidence     = float(extra.get("confidence", 0.0)) if isinstance(extra, dict) else 0.0,
-                    timestamp      = datetime.utcnow().isoformat() + "Z",
+                    timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                     severity       = _sev_map.get(level, "High"),
                     metadata       = {
                         "cameraId": source_id or source_path,

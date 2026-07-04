@@ -14,7 +14,7 @@ import uuid  # [W3] top-level
 import cv2, sys, time, yaml, torch, requests, os
 from pathlib import Path
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
@@ -350,7 +350,7 @@ def main(src:str, port:int=8081, location:str=""):
                                         detection_type = "Gesture",
                                         zone           = location or "Unknown-0",
                                         confidence     = conf,
-                                        timestamp      = datetime.utcnow().isoformat() + "Z",
+                                        timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                         severity       = "High",
                                         metadata       = {
                                             "cameraId": source_id,
@@ -398,7 +398,7 @@ def main(src:str, port:int=8081, location:str=""):
                                     detection_type = "Gesture",
                                     zone           = location or "Unknown-0",
                                     confidence     = conf,
-                                    timestamp      = datetime.utcnow().isoformat() + "Z",
+                                    timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                     severity       = "High",
                                     metadata       = {
                                         "cameraId": source_id,
@@ -457,7 +457,7 @@ def main(src:str, port:int=8081, location:str=""):
                                         detection_type = "Fall",
                                         zone           = location or "Unknown-0",
                                         confidence     = conf,
-                                        timestamp      = datetime.utcnow().isoformat() + "Z",
+                                        timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                                         severity       = _sev_map.get(lv, "High"),
                                         metadata       = {
                                             "cameraId": source_id,
