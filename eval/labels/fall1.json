@@ -1,0 +1,15 @@
+{
+  "_comment": "ไฟล์นี้เป็นตัวอย่าง schema เท่านั้น — eval_harness.py จะข้ามไฟล์ชื่อ example.json โดยอัตโนมัติ. ให้ copy ไปตั้งชื่อใหม่ (เช่น fall1.json) แล้วแก้ตามวิดีโอจริง",
+  "video": "fall1.mp4",
+  "_video_comment": "ชื่อไฟล์วิดีโอ ต้องตรงกับไฟล์จริงใน --videos-dir",
+  "location": "ห้องนอน",
+  "events": [
+    {
+      "event_type": "fall",
+      "start_sec": 7.0,
+      "end_sec": 17.0,
+      "notes": "ล้มจริง นอนนิ่งบนพื้นประมาณ 10 วินาที"
+    }
+  ],
+  "_events_comment": "event_type ต้องเป็นหนึ่งใน: fall, hand_sos, pose_sos, object_theft, object_left. start_sec/end_sec คือช่วงเวลาที่เหตุการณ์เกิดขึ้นจริงในวิดีโอ (วินาที นับจากต้นคลิป). ถ้าวิดีโอเป็น hard-negative (ไม่มีเหตุการณ์จริงเลย เช่น คนเดินผ่าน/นั่งเฉยๆ/โบกมือทักทาย) ให้ใส่ 'events': [] แล้วทุก prediction ที่เกิดขึ้นจะถูกนับเป็น false positive ทั้งหมด — มีประโยชน์มากสำหรับวัด false-alarm rate"
+}
