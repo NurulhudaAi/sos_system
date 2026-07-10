@@ -1,13 +1,13 @@
 {
     "_comment": "ไฟล์นี้เป็นตัวอย่าง schema เท่านั้น — eval_harness.py จะข้ามไฟล์ชื่อ example.json โดยอัตโนมัติ. ให้ copy ไปตั้งชื่อใหม่ (เช่น fall1.json) แล้วแก้ตามวิดีโอจริง",
-    "video": "hand2.mp4",
+    "video": "hand3.mp4",
     "_video_comment": "ชื่อไฟล์วิดีโอ ต้องตรงกับไฟล์จริงใน --videos-dir",
     "location": "ห้องนั่งเล่น",
     "events": [
         {
             "event_type": "hand_sos",
-            "start_sec": 9.0,
-            "end_sec": 10.0,
+            "start_sec": 2.0,
+            "end_sec": 9.0,
             "notes": "ล้มจริง นอนนิ่งบนพื้นประมาณ 10 วินาที"
         }
     ],

@@ -14,7 +14,7 @@ import uuid  # [W3] top-level
 import cv2, sys, time, yaml, torch, requests, os
 from pathlib import Path
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
@@ -184,6 +184,8 @@ def main(src:str, port:int=8081, location:str=""):
 
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
+    hand_miss:   dict[int, int] = {}
+    GRACE_FRAMES = 5
     # [FIX] one CooldownEngine per track for pose SOS temporal confirmation —
     # PoseSOSDetector.detect() is a single-frame check with no memory, so it
     # needs the same temporal_window/temporal_threshold smoothing that
@@ -219,7 +221,11 @@ def main(src:str, port:int=8081, location:str=""):
             zones.draw(frame)
 
             rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-            try: hand_d.process_frame(rgb)
+            # CLAHE brightness enhancement for low-light hand detection
+            lab=cv2.cvtColor(frame,cv2.COLOR_BGR2LAB)
+            lab[:,:,0]=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8)).apply(lab[:,:,0])
+            rgb_enhanced=cv2.cvtColor(lab,cv2.COLOR_LAB2RGB)
+            try: hand_d.process_frame(rgb_enhanced)
             except Exception: pass
 
             now_time=time.strftime("%Y-%m-%d %H:%M:%S")
@@ -268,8 +274,8 @@ def main(src:str, port:int=8081, location:str=""):
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused
-                    for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt, pose_engines]:
+                    for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
+                              hand_bt, fall_bc, fall_bf, fall_bt]:
                         d.pop(tid, None)
 
             if boxes and kpts and kpts.data:
@@ -330,9 +336,15 @@ def main(src:str, port:int=8081, location:str=""):
                                     except Exception: pass
                                     break
                     except Exception: pass
-                    if not hdet: hs=max(0,hs-1)
-                    hand_states[tid]=hs  # [B2] เก็บ state per-track
-
+                    if hdet:
+                        hand_miss[tid] = 0
+                    else:
+                        hand_miss[tid] = hand_miss.get(tid, 0) + 1
+                        if hand_miss[tid] >= GRACE_FRAMES:
+                            hs = max(0, hs - 1)
+                            hand_miss[tid] = 0
+                    hand_states[tid]=hs
+                   
                     if hs==3 and not fall_ev.get(tid):
                         if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
                             hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
@@ -346,15 +358,18 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "hand_sos",
-                                        severity      = 2,
-                                        severity_name = "HIGH",
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Gesture",
+                                        zone           = location,
+                                        confidence     = conf,
+                                        timestamp      = datetime.utcnow().isoformat(),
+                                        severity       = "High",
+                                        metadata       = {
+                                            "source_id":  source_id,
+                                            "track_id":   tid,
+                                            "image_path": str(img_path),
+                                            "gesture":    "hand_sos",
+                                        },
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
@@ -386,15 +401,18 @@ def main(src:str, port:int=8081, location:str=""):
                         if img_path:
                             try:
                                 insert_incident(
-                                    event_uuid    = str(uuid.uuid4()),
-                                    event_type    = "pose_sos",
-                                    severity      = 2,
-                                    severity_name = "HIGH",
-                                    source_id     = source_id,
-                                    location      = location,
-                                    track_id      = tid,
-                                    image_path    = str(img_path),
-                                    extra         = {**ex, "confidence": conf}
+                                    event_uuid     = str(uuid.uuid4()),
+                                    detection_type = "pose_sos",
+                                    zone           = location,
+                                    confidence     = conf,
+                                    timestamp      = datetime.now(timezone.utc).isoformat(),
+                                    severity       = "High",
+                                    metadata       = {
+                                        **ex,
+                                        "source_id":  source_id,
+                                        "track_id":   tid,
+                                        "image_path": str(img_path),
+                                    },
                                 )
                             except Exception as e:
                                 print(f"[DB] pose_sos insert error: {e}")
@@ -436,15 +454,19 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "fall",
-                                        severity      = lv,
-                                        severity_name = ln,
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Fall",
+                                        zone           = location,
+                                        confidence     = conf,
+                                        timestamp      = now_time,
+                                        severity       = lv,
+                                        metadata       = {
+                                            **ex,
+                                            "severity_name": ln,
+                                            "source_id":     source_id,
+                                            "track_id":      tid,
+                                            "image_path":    str(img_path),
+                                        }
                                     )
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
@@ -454,6 +476,7 @@ def main(src:str, port:int=8081, location:str=""):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
 
             viz.fps(frame)
+
 
     except KeyboardInterrupt:
         print(f"\n[{source_id[-30:]}] Stopped.")

@@ -1,7 +1,7 @@
 {
   "tolerance_sec": 5.0,
   "total_video_hours": 0.020859592592592593,
-  "false_alarms_per_hour": 814.973,
+  "false_alarms_per_hour": 862.912,
   "metrics": {
     "fall": {
       "tp": 3,
@@ -12,16 +12,16 @@
       "f1": 1.0
     },
     "hand_sos": {
-      "tp": 0,
+      "tp": 1,
       "fp": 1,
-      "fn": 3,
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": null
+      "fn": 2,
+      "precision": 0.5,
+      "recall": 0.3333333333333333,
+      "f1": 0.4
     },
     "pose_sos": {
       "tp": 0,
-      "fp": 16,
+      "fp": 17,
       "fn": 0,
       "precision": 0.0,
       "recall": null,

@@ -44,13 +44,14 @@ fall_warning:
 
 pose_sos:
   raise_margin_px: 25
-  temporal_window: 10
-  temporal_threshold: 0.40
+  temporal_window: 30
+  temporal_threshold: 0.60
   cooldown_seconds: 10
 
 hand_sos:
-  min_detection_confidence: 0.60
-  min_tracking_confidence: 0.40
+  min_detection_confidence: 0.45
+  min_tracking_confidence: 0.30
+  thumb_in_ratio: 0.85
   temporal_window: 10
   temporal_threshold: 0.40
   cooldown_seconds: 60

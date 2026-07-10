@@ -55,6 +55,12 @@ from detectors.object_guardian import ObjectGuardian       # noqa: E402
 from pipeline import CooldownEngine, ZoneManager, AlertDispatcher  # noqa: E402
 from utils import preprocess                               # noqa: E402
 
+# ── Debug toggle ────────────────────────────────────────────────
+DEBUG_HAND = True   # ตั้ง False เมื่อ debug เสร็จแล้ว เพื่อลด log ท่วม
+
+def _hand_dbg(msg: str):
+    if DEBUG_HAND:
+        print(f"  [hand-dbg] {msg}")
 
 # ───────────────────────── Minimal tracking helpers (mirrors main.py) ─────────
 # หมายเหตุ: คัดลอกมาจาก main.py โดยตั้งใจ (ไม่ import main.py ตามเหตุผลด้านบน)
@@ -185,7 +191,11 @@ class VideoEvaluator:
         obj_grd = ObjectGuardian({**self.cfg.get("object_guardian", {}), "alert_dir": "/tmp/eval_alerts"})
 
         hand_states: Dict[int, int] = {}
+        hand_miss:   Dict[int, int] = {}
+        GRACE_FRAMES = 5
         hand_ev: Dict[int, bool] = {}
+        hand_last_dispatch: Dict[int, float] = {}   # ← เพิ่มบรรทัดนี้
+        HAND_SOS_COOLDOWN_SEC = 3.0                  # ← เพิ่มบรรทัดนี้
         fall_ev: Dict[int, bool] = {}
         pose_cd: Dict[int, CooldownEngine] = {}
 
@@ -205,7 +215,11 @@ class VideoEvaluator:
             h, w = frame.shape[:2]
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            try: hand_d.process_frame(rgb)
+            # CLAHE brightness enhancement for low-light hand detection
+            lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+            lab[:, :, 0] = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(lab[:, :, 0])
+            rgb_enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+            try: hand_d.process_frame(rgb_enhanced)
             except Exception: pass
 
             resp = call_detect_all(self.det_url, frame)
@@ -236,7 +250,7 @@ class VideoEvaluator:
                 dropped = set(hand_states.keys()) - active
                 for tid in dropped:
                     tracker.cleanup_track(tid)
-                    for d in [hand_states, hand_ev, fall_ev, pose_cd]:
+                    for d in [hand_states, hand_miss, hand_ev, hand_last_dispatch, fall_ev, pose_cd]:
                         d.pop(tid, None)
 
             if not kpts.data:
@@ -258,30 +272,63 @@ class VideoEvaluator:
                 try:
                     rh = getattr(hand_d, "_results", None)
                     if rh and getattr(rh, "hand_landmarks", None):
-                        for hl in rh.hand_landmarks:
+                        for hidx, hl in enumerate(rh.hand_landmarks):
                             xs = [l.x for l in hl]; ys = [l.y for l in hl]
                             area = (max(xs)-min(xs))*w*(max(ys)-min(ys))*h/(w*h)
-                            if area < self.cfg.get("hand_sos", {}).get("min_hand_bbox_area_norm", 0.002):
+                            min_area = self.cfg.get("hand_sos", {}).get("min_hand_bbox_area_norm", 0.002)
+                            if area < min_area:
+                                _hand_dbg(f"t={t_sec:.2f}s tid={tid} hand#{hidx} "
+                                          f"area={area:.5f} min={min_area:.5f} SKIP(small)")
                                 continue
                             pts = [(int(l.x*w), int(l.y*h)) for l in hl]
                             hx = sum(p[0] for p in pts)/len(pts); hy = sum(p[1] for p in pts)/len(pts)
-                            if x1 <= hx <= x2 and y1 <= hy <= y2:
+                            in_bbox = x1 <= hx <= x2 and y1 <= hy <= y2
+                            _hand_dbg(f"t={t_sec:.2f}s tid={tid} hand#{hidx} "
+                                      f"area={area:.5f} min={min_area:.5f} OK")
+                            _hand_dbg(f"  hand_center=({int(hx)},{int(hy)}) "
+                                      f"person_bbox=({int(x1)},{int(y1)},{int(x2)},{int(y2)}) in_bbox={in_bbox}")
+                            if in_bbox:
                                 hdet = True
                                 try:
-                                    if hs == 0 and hand_d._palm_open(hl): hs = 1
-                                    elif hs == 1 and hand_d._thumb_in(hl): hs = 2
-                                    elif hs == 2 and hand_d._fingers_closed(hl): hs = 3
-                                except Exception: pass
+                                    p_open  = hand_d._palm_open(hl)
+                                    t_in    = hand_d._thumb_in(hl)
+                                    f_close = hand_d._fingers_closed(hl)
+                                    _hand_dbg(f"  state={hs} palm_open={p_open} "
+                                              f"thumb_in={t_in} fingers_closed={f_close}")
+                                    if hs == 0 and p_open: hs = 1
+                                    elif hs == 1 and t_in: hs = 2
+                                    elif hs == 2 and f_close: hs = 3
+                                except Exception as e:
+                                    _hand_dbg(f"  !! helper method error: {e}")
                                 break
-                except Exception: pass
-                if not hdet: hs = max(0, hs-1)
+                except Exception as e:
+                    _hand_dbg(f"t={t_sec:.2f}s tid={tid} !! detection block error: {e}")
+
+                prev_hs = hand_states.get(tid, 0)
+                if hdet:
+                    hand_miss[tid] = 0
+                else:
+                    hand_miss[tid] = hand_miss.get(tid, 0) + 1
+                    if hand_miss[tid] >= GRACE_FRAMES:
+                        hs = max(0, hs - 1)
+                        hand_miss[tid] = 0
                 hand_states[tid] = hs
+                if hs != prev_hs or hdet:
+                    _hand_dbg(f"t={t_sec:.2f}s tid={tid} state: {prev_hs}→{hs} hdet={hdet}")
 
                 if hs == 3 and not fall_ev.get(tid):
                     hand_ev[tid] = True
+                    _hand_dbg(f"t={t_sec:.2f}s tid={tid} *** STATE 3 REACHED — hand_ev=True ***")
                 elif hand_ev.get(tid):
-                    preds.append(Prediction(video=video_path.name, event_type="hand_sos",
-                                             track_id=tid, t_sec=t_sec, confidence=1.0))
+                    last = hand_last_dispatch.get(tid, -999)
+                    if t_sec - last >= HAND_SOS_COOLDOWN_SEC:
+                        preds.append(Prediction(video=video_path.name, event_type="hand_sos",
+                                                 track_id=tid, t_sec=t_sec, confidence=1.0))
+                        hand_last_dispatch[tid] = t_sec
+                        _hand_dbg(f"t={t_sec:.2f}s tid={tid} >>> falling-edge dispatch — prediction recorded")
+                    else:
+                        _hand_dbg(f"t={t_sec:.2f}s tid={tid} >>> falling-edge suppressed "
+                                  f"(cooldown {t_sec-last:.2f}s < {HAND_SOS_COOLDOWN_SEC}s)")
                     hand_ev[tid] = False
 
                 # ── Pose SOS ──────────────────────────────────────────
@@ -316,6 +363,17 @@ class VideoEvaluator:
                 else:
                     fall_ev[tid] = False
 
+        # ── สิ้นสุดวิดีโอ: flush event ที่ยังค้างอยู่ (state=3 แต่ไม่เคย falling-edge จะ trigger) ──
+        for tid, active in list(hand_ev.items()):
+            if active:
+                last = hand_last_dispatch.get(tid, -999)
+                if t_sec - last >= HAND_SOS_COOLDOWN_SEC:
+                    preds.append(Prediction(video=video_path.name, event_type="hand_sos",
+                                             track_id=tid, t_sec=t_sec, confidence=1.0))
+                    hand_last_dispatch[tid] = t_sec
+                    _hand_dbg(f"t={t_sec:.2f}s tid={tid} >>> END-OF-VIDEO FLUSH — "
+                              f"event ค้างที่ state=3 ตอนวิดีโอจบ, บันทึกเป็น prediction")
+                hand_ev[tid] = False
         cap.release()
         try: hand_d.release()
         except Exception: pass

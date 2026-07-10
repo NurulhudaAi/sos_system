@@ -72,11 +72,21 @@ class HandSOSDetector:
         return extended >= 3  # อย่างน้อย 3 ใน 4 นิ้วยืดออก
 
     def _thumb_in(self, lm):
+        """ระยะห่างจาก thumb tip ถึง palm center เทียบกับ hand span — ทนการหมุนมือ"""
         px = (lm[5].x + lm[17].x) / 2
-        return abs(lm[4].x - px) < abs(lm[12].x - px) * self._thumb_ratio  # [FIX Issue 8]
+        py = (lm[5].y + lm[17].y) / 2
+        hand_span = ((lm[5].x - lm[17].x)**2 + (lm[5].y - lm[17].y)**2) ** 0.5
+        thumb_dist = ((lm[4].x - px)**2 + (lm[4].y - py)**2) ** 0.5
+        return thumb_dist < hand_span * self._thumb_ratio
 
     def _fingers_closed(self, lm):
-        return all(lm[t].y > lm[m].y for t,m in zip([8,12,16,20],[5,9,13,17]))
+        """เทียบระยะ fingertip→wrist กับ MCP→wrist แทน y-only — ทนมือเอียง"""
+        wrist = lm[0]
+        def _d(a, b):
+            return ((a.x-b.x)**2 + (a.y-b.y)**2) ** 0.5
+        tips = [8, 12, 16, 20]
+        mcps = [5, 9, 13, 17]
+        return all(_d(lm[t], wrist) < _d(lm[m], wrist) * 1.15 for t, m in zip(tips, mcps))
 
     def process_frame(self, frame_rgb) -> dict:
         """รัน MediaPipe; เก็บ _results ไว้ให้ main.py อ่าน per-track"""
