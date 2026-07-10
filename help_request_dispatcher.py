@@ -34,8 +34,8 @@ class HelpRequestDispatcher:
         if not self.enabled:
             return False
 
-        if event_type in ("hand_sos", "pose_sos"):
-            return True  # ALL hand SOS / pose SOS events — explicit human gesture for help
+        if event_type in ("hand_sos"):
+            return True  # ALL hand SOS — explicit human gesture for help
 
         if event_type == "fall" and severity >= 2:  # MED (1) < HIGH (2) <= CRITICAL (3)
             return True

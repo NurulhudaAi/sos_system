@@ -32,7 +32,6 @@ IAM_INGEST_URL    = os.getenv("IAM_INGEST_URL", "http://localhost:3000/api/v1/in
 DETECTION_TYPE_MAP = {
     "fall":         "Fall",
     "hand_sos":     "Gesture",
-    "pose_sos":     "Gesture",
     "object_event": "ObjectMissing",
     # Future types
     "inactivity":   "Inactivity",
@@ -126,7 +125,7 @@ class EventBridge:
 
         Args:
             detection_event: dict with keys:
-                - event_type (str): "fall", "hand_sos", "pose_sos", "object_event"
+                - event_type (str): "fall", "hand_sos", "object_event"
                 - severity (int): 0-3
                 - source_id (str): camera ID
                 - location (str): Thai location name

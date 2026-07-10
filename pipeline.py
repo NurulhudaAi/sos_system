@@ -61,7 +61,6 @@ class AlertDispatcher:
     LABELS = {
         "fall":"FALL DETECTED",
         "hand_sos":"SILENT SOS HAND",
-        "pose_sos":"SOS ARM RAISE",  # [FIX] added — was falling back to generic "ALERT" in logs
         "fall_warning":"FALL WARNING",
     }
 
@@ -292,7 +291,7 @@ class AlertDispatcher:
         # from main.py.
         if self.db:
             try:
-                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "pose_sos": "Gesture", "object_event": "ObjectMissing"}
+                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "object_event": "ObjectMissing"}
                 _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
                 source_id   = extra.get("source_id") if isinstance(extra, dict) else None
                 source_path = extra.get("source")    if isinstance(extra, dict) else None
