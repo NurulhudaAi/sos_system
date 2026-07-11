@@ -258,11 +258,17 @@ def main(src:str, port:int=8081, location:str=""):
                 boxes=None; kpts=None
 
             # [W2] cleanup tracks ที่หายไปจากเฟรม
+            # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ที่เห็นในเฟรมปัจจุบันเฟรม
+            # เดียว) ทำให้ hand_states/fall state ถูกล้างทิ้งทันทีที่ detect พลาดแม้แค่ 1
+            # เฟรม (เช่น motion blur ตอนคนลุกขึ้นเดินเร็วๆ) — ทั้งที่ SimpleTracker เองยัง
+            # ไม่ทันลบ track (มี grace period เก็บ track ไว้จนกว่าจะ lost ติดกัน >5 เฟรม)
+            # ผลคือ progress ของ state machine (เช่น hand_sos state 2 ใกล้จะถึง 3) หายไป
+            # กลางคันบ่อยๆ โดยไม่จำเป็น → เปลี่ยนมาเช็คจาก tracker.tracks แทน เพื่อให้
+            # cleanup ยึด grace period เดียวกับที่ tracker ใช้จริง
             if boxes and boxes.id:
-                active = {int(boxes.id[i].cpu()) for i in range(len(boxes.xyxy))}
-                dropped = set(hand_states.keys()) - active
+                alive = set(tracker.tracks.keys())
+                dropped = set(hand_states.keys()) - alive
                 for tid in dropped:
-                    tracker.cleanup_track(tid)
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused

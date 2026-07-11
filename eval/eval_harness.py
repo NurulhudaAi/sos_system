@@ -243,10 +243,12 @@ class VideoEvaluator:
             kpts = KeypointsWrapper([d.get("keypoints", []) for d in assigned])
 
             if boxes.id:
-                active = {int(boxes.id[i].cpu()) for i in range(len(boxes.xyxy))}
-                dropped = set(hand_states.keys()) - active
+                # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ในเฟรมปัจจุบัน) ทำให้
+                # hand_states ถูกล้างทันทีที่ detect พลาดแม้ 1 เฟรม ก่อน SimpleTracker เอง
+                # จะทันลบ track (grace period lost>5) → เปลี่ยนมาเช็คจาก tracker.tracks
+                alive = set(tracker.tracks.keys())
+                dropped = set(hand_states.keys()) - alive
                 for tid in dropped:
-                    tracker.cleanup_track(tid)
                     for d in [hand_states, hand_miss, hand_ev, hand_last_dispatch, fall_ev]:
                         d.pop(tid, None)
 
