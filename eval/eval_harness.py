@@ -5,7 +5,7 @@ eval/eval_harness.py — Offline accuracy evaluation for the SOS detection pipel
 
 จุดประสงค์
 ──────────
-วัด precision / recall / F1 / false-alarm-per-hour ของ fall / hand_sos / pose_sos /
+วัด precision / recall / F1 / false-alarm-per-hour ของ fall / hand_sos / 
 object_theft / object_left จริงๆ แทนที่จะจูน threshold ด้วยตาอย่างเดียว
 
 หลักการออกแบบ
@@ -13,7 +13,7 @@ object_theft / object_left จริงๆ แทนที่จะจูน thr
 - ไม่แก้ main.py และไม่ import main.py (main.py มี side-effect ตอน import: เรียก
   init_env() ซึ่งอาจ sys.exit(1), ต้องมี .env ที่ configure แล้ว ฯลฯ — ไม่เหมาะกับ
   offline batch script)
-- Import detector class ตัวจริง (FallDetector, HandSOSDetector, PoseSOSDetector,
+- Import detector class ตัวจริง (FallDetector, HandSOSDetector,
   ObjectGuardian) และ CooldownEngine/ZoneManager/AlertDispatcher จาก pipeline.py
   ตัวเดียวกับที่ production ใช้ — เพื่อไม่ให้ eval กับของจริงเพี้ยนกัน
 - ไม่เขียนลง MongoDB เลย (ไม่เรียก insert_incident/insert_object_event) — รันได้
@@ -50,7 +50,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from detectors.fall_detector import FallDetector          # noqa: E402
 from detectors.hand_sos_detector import HandSOSDetector    # noqa: E402
-from detectors.pose_sos_detector import PoseSOSDetector    # noqa: E402
 from detectors.object_guardian import ObjectGuardian       # noqa: E402
 from pipeline import CooldownEngine, ZoneManager, AlertDispatcher  # noqa: E402
 from utils import preprocess                               # noqa: E402
@@ -136,7 +135,7 @@ def call_detect_all(det_url: str, frame, timeout=5) -> dict:
 
 def _cooldown_ratio(engine: CooldownEngine) -> Optional[float]:
     """สัดส่วนเฟรม positive ใน buffer ปัจจุบันของ CooldownEngine — ใช้เป็น confidence
-    proxy สำหรับ hand_sos/pose_sos (สอดคล้องกับค่าที่ engine ใช้ตัดสินใจ trigger จริง)"""
+    proxy สำหรับ hand_sos(สอดคล้องกับค่าที่ engine ใช้ตัดสินใจ trigger จริง)"""
     buf = engine._buf
     if not buf:
         return None
@@ -187,7 +186,6 @@ class VideoEvaluator:
         tracker = SimpleTracker()
         fall_d = FallDetector(self.cfg.get("fall", {}))
         hand_d = HandSOSDetector(self.cfg.get("hand_sos", {}))
-        pose_d = PoseSOSDetector(self.cfg.get("pose_sos", {}))
         obj_grd = ObjectGuardian({**self.cfg.get("object_guardian", {}), "alert_dir": "/tmp/eval_alerts"})
 
         hand_states: Dict[int, int] = {}
@@ -197,7 +195,6 @@ class VideoEvaluator:
         hand_last_dispatch: Dict[int, float] = {}   # ← เพิ่มบรรทัดนี้
         HAND_SOS_COOLDOWN_SEC = 3.0                  # ← เพิ่มบรรทัดนี้
         fall_ev: Dict[int, bool] = {}
-        pose_cd: Dict[int, CooldownEngine] = {}
 
         preds: List[Prediction] = []
         source_id = str(video_path)
@@ -250,7 +247,7 @@ class VideoEvaluator:
                 dropped = set(hand_states.keys()) - active
                 for tid in dropped:
                     tracker.cleanup_track(tid)
-                    for d in [hand_states, hand_miss, hand_ev, hand_last_dispatch, fall_ev, pose_cd]:
+                    for d in [hand_states, hand_miss, hand_ev, hand_last_dispatch, fall_ev]:
                         d.pop(tid, None)
 
             if not kpts.data:
@@ -330,20 +327,6 @@ class VideoEvaluator:
                         _hand_dbg(f"t={t_sec:.2f}s tid={tid} >>> falling-edge suppressed "
                                   f"(cooldown {t_sec-last:.2f}s < {HAND_SOS_COOLDOWN_SEC}s)")
                     hand_ev[tid] = False
-
-                # ── Pose SOS ──────────────────────────────────────────
-                try:
-                    pose_r = pose_d.detect(kp, h)
-                except Exception:
-                    pose_r = {"is_sos": False}
-                pcd = pose_cd.get(tid)
-                if pcd is None:
-                    pcd = CooldownEngine("pose_sos", self.cfg.get("pose_sos", {}))
-                    pose_cd[tid] = pcd
-                if pcd.update(bool(pose_r.get("is_sos"))):
-                    preds.append(Prediction(video=video_path.name, event_type="pose_sos",
-                                             track_id=tid, t_sec=t_sec,
-                                             confidence=_cooldown_ratio(pcd)))
 
                 # ── Fall ──────────────────────────────────────────────
                 esc = fr.get("danger_lying") and not fr.get("recovered_quickly")
@@ -537,4 +520,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+     main()

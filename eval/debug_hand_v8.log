@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/Users/nurulhudaadamishaq/Documents/sos_system/eval/eval_harness.py", line 523, in <module>
+    main()
+    ~~~~^^
+  File "/Users/nurulhudaadamishaq/Documents/sos_system/eval/eval_harness.py", line 468, in main
+    all_gt = load_labels(labels_dir)
+  File "/Users/nurulhudaadamishaq/Documents/sos_system/eval/eval_harness.py", line 427, in load_labels
+    all_gt[video].append(GTWindow(ev["event_type"], float(ev["start_sec"]), float(ev["end_sec"])))
+                                  ~~^^^^^^^^^^^^^^
+KeyError: 'event_type'
