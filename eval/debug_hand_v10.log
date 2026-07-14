@@ -1,8 +1,8 @@
-I0000 00:00:1783741391.336169 2890344 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+I0000 00:00:1783742503.463267 2905625 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
 INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
-W0000 00:00:1783741391.348022 2890347 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741391.352196 2890349 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741391.498620 2890348 landmark_projection_calculator.cc:81] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
+W0000 00:00:1783742503.480617 2905628 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742503.497849 2905633 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742503.645296 2905632 landmark_projection_calculator.cc:81] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
 ▶ กำลังประมวลผล: fall1.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=0.02s tid=0 hand#0 area=0.00834 min=0.00200 OK
@@ -1835,12 +1835,12 @@ HandSOSDetector ready ✓
   [hand-dbg] t=11.06s tid=0 state: 3→3 hdet=True
   [hand-dbg] t=11.06s tid=13 hand#0 area=0.00965 min=0.00200 OK
   [hand-dbg]   hand_center=(1099,686) person_bbox=(32,363,282,952) in_bbox=False
-  [hand-dbg] t=11.08s tid=0 hand#0 area=0.00849 min=0.00200 OKI0000 00:00:1783741455.379482 2891021 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741455.382280 2891023 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741455.384894 2891023 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-I0000 00:00:1783741486.456791 2891364 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741486.459415 2891366 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741486.462005 2891367 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+  [hand-dbg] t=11.08s tid=0 hand#0 area=0.00849 min=0.00200 OKI0000 00:00:1783742568.574798 2906578 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742568.578091 2906581 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742568.581716 2906585 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1783742604.775794 2908308 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742604.779866 2908310 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742604.783020 2908310 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
 
   [hand-dbg]   hand_center=(1093,690) person_bbox=(752,598,1853,1061) in_bbox=True
   [hand-dbg]   state=3 palm_open=True thumb_in=False fingers_closed=False
@@ -1975,7 +1975,7 @@ W0000 00:00:1783741486.462005 2891367 inference_feedback_manager.cc:121] Feedbac
   [hand-dbg]   state=0 palm_open=True thumb_in=False fingers_closed=False
   [hand-dbg] t=16.76s tid=0 state: 0→1 hdet=True
   [hand-dbg] t=16.86s tid=0 state: 1→0 hdet=False
-  เสร็จใน 64.3s — พบ 2 predicted events
+  เสร็จใน 65.4s — พบ 2 predicted events
 ▶ กำลังประมวลผล: fall2.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=0.12s tid=0 hand#0 area=0.00296 min=0.00200 OK
@@ -3657,15 +3657,15 @@ HandSOSDetector ready ✓
   [hand-dbg]   state=2 palm_open=True thumb_in=False fingers_closed=False
   [hand-dbg] t=14.96s tid=0 state: 2→2 hdet=True
   [hand-dbg] t=14.96s tid=13 hand#0 area=0.01146 min=0.00200 OK
-  [hand-dbg]   hand_center=(774,341) person_bbox=(497,0,816,78) in_bbox=FalseI0000 00:00:1783741511.419791 2891750 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741511.422443 2891755 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741511.424972 2891755 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-I0000 00:00:1783741528.905524 2892068 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741528.908186 2892070 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741528.910766 2892070 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-I0000 00:00:1783741556.047368 2892332 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741556.050043 2892334 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741556.052626 2892336 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+  [hand-dbg]   hand_center=(774,341) person_bbox=(497,0,816,78) in_bbox=FalseI0000 00:00:1783742631.895410 2909006 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742631.898104 2909007 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742631.900781 2909008 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1783742650.707526 2909403 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742650.710255 2909406 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742650.712809 2909406 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1783742679.375231 2909879 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742679.378233 2909881 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742679.381055 2909881 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
 
   [hand-dbg] t=15.00s tid=0 hand#0 area=0.01152 min=0.00200 OK
   [hand-dbg]   hand_center=(774,340) person_bbox=(426,261,1539,1009) in_bbox=True
@@ -3725,7 +3725,7 @@ W0000 00:00:1783741556.052626 2892336 inference_feedback_manager.cc:121] Feedbac
   [hand-dbg]   hand_center=(768,334) person_bbox=(430,260,1574,930) in_bbox=True
   [hand-dbg]   state=2 palm_open=True thumb_in=False fingers_closed=False
   [hand-dbg] t=15.40s tid=0 state: 2→2 hdet=True
-  เสร็จใน 31.1s — พบ 3 predicted events
+  เสร็จใน 36.2s — พบ 3 predicted events
 ▶ กำลังประมวลผล: fall3.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=5.36s tid=0 hand#0 area=0.00284 min=0.00200 OK
@@ -4460,13 +4460,13 @@ HandSOSDetector ready ✓
   [hand-dbg]   hand_center=(836,949) person_bbox=(722,569,1734,1010) in_bbox=True
   [hand-dbg]   state=2 palm_open=True thumb_in=False fingers_closed=False
   [hand-dbg] t=12.76s tid=0 state: 2→2 hdet=True
-  เสร็จใน 25.0s — พบ 1 predicted events
+  เสร็จใน 27.1s — พบ 1 predicted events
 ▶ กำลังประมวลผล: fall7.m4v ...
 HandSOSDetector ready ✓
-  เสร็จใน 17.5s — พบ 3 predicted events
+  เสร็จใน 18.8s — พบ 3 predicted events
 ▶ กำลังประมวลผล: fall9.m4v ...
 HandSOSDetector ready ✓
-  เสร็จใน 27.1s — พบ 1 predicted events
+  เสร็จใน 28.7s — พบ 1 predicted events
 ▶ กำลังประมวลผล: hand1.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=0.03s tid=0 hand#0 area=0.12564 min=0.00200 OK
@@ -5518,15 +5518,12 @@ HandSOSDetector ready ✓
   [hand-dbg]   state=3 palm_open=True thumb_in=True fingers_closed=False
   [hand-dbg] t=10.13s tid=0 state: 3→3 hdet=True
   [hand-dbg] t=10.13s tid=0 *** STATE 3 REACHED — hand_ev=True ***
-  [hand-dbg] t=10.13s tid=4 hand#0 area=0.08950 min=0.00200 OKI0000 00:00:1783741583.515448 2892860 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741583.518117 2892861 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741583.520673 2892861 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-I0000 00:00:1783741601.663052 2893043 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741601.665722 2893044 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741601.668326 2893044 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-I0000 00:00:1783741619.195675 2893255 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
-W0000 00:00:1783741619.198309 2893256 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
-W0000 00:00:1783741619.200874 2893256 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+  [hand-dbg] t=10.13s tid=4 hand#0 area=0.08950 min=0.00200 OKI0000 00:00:1783742707.925317 2910197 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742707.928012 2910199 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742707.930636 2910199 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1783742726.990115 2910476 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1783742726.992786 2910477 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1783742726.995348 2910477 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
 
   [hand-dbg]   hand_center=(1101,374) person_bbox=(61,88,1661,1069) in_bbox=True
   [hand-dbg]   state=0 palm_open=True thumb_in=True fingers_closed=False
@@ -5687,7 +5684,7 @@ W0000 00:00:1783741619.200874 2893256 inference_feedback_manager.cc:121] Feedbac
   [hand-dbg]   hand_center=(1115,118) person_bbox=(0,8,1414,1065) in_bbox=True
   [hand-dbg]   state=2 palm_open=True thumb_in=False fingers_closed=False
   [hand-dbg] t=12.00s tid=0 state: 2→2 hdet=True
-  เสร็จใน 27.5s — พบ 1 predicted events
+  เสร็จใน 28.6s — พบ 1 predicted events
 ▶ กำลังประมวลผล: hand3.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=0.04s tid=0 hand#0 area=0.03642 min=0.00200 OK
@@ -6758,262 +6755,7 @@ HandSOSDetector ready ✓
   [hand-dbg] t=9.20s tid=0 state: 3→3 hdet=True
   [hand-dbg] t=9.20s tid=0 *** STATE 3 REACHED — hand_ev=True ***
   [hand-dbg] t=9.20s tid=0 >>> END-OF-VIDEO FLUSH — event ค้างที่ state=3 ตอนวิดีโอจบ, บันทึกเป็น prediction
-  เสร็จใน 18.1s — พบ 1 predicted events
-▶ กำลังประมวลผล: hand5.mp4 ...
-HandSOSDetector ready ✓
-  [hand-dbg] t=0.97s tid=0 hand#0 area=0.04542 min=0.00200 OK
-  [hand-dbg]   hand_center=(1005,949) person_bbox=(796,839,1280,1077) in_bbox=True
-  [hand-dbg]   state=0 palm_open=False thumb_in=False fingers_closed=False
-  [hand-dbg] t=0.97s tid=0 state: 0→0 hdet=True
-  [hand-dbg] t=1.00s tid=0 hand#0 area=0.05220 min=0.00200 OK
-  [hand-dbg]   hand_center=(996,920) person_bbox=(789,785,1280,1075) in_bbox=True
-  [hand-dbg]   state=0 palm_open=False thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.00s tid=0 state: 0→0 hdet=True
-  [hand-dbg] t=1.03s tid=0 hand#0 area=0.05993 min=0.00200 OK
-  [hand-dbg]   hand_center=(997,876) person_bbox=(780,725,1280,1077) in_bbox=True
-  [hand-dbg]   state=0 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.03s tid=0 state: 0→1 hdet=True
-  [hand-dbg] t=1.07s tid=0 hand#0 area=0.06998 min=0.00200 OK
-  [hand-dbg]   hand_center=(993,832) person_bbox=(773,665,1279,1066) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.07s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.10s tid=0 hand#0 area=0.08203 min=0.00200 OK
-  [hand-dbg]   hand_center=(993,786) person_bbox=(767,623,1279,1062) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.10s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.13s tid=0 hand#0 area=0.09189 min=0.00200 OK
-  [hand-dbg]   hand_center=(991,748) person_bbox=(755,562,1281,1061) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.13s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.17s tid=0 hand#0 area=0.10371 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,703) person_bbox=(752,469,1275,1055) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.17s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.20s tid=0 hand#0 area=0.10536 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,667) person_bbox=(746,456,1274,1051) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.20s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.23s tid=0 hand#0 area=0.11053 min=0.00200 OK
-  [hand-dbg]   hand_center=(986,627) person_bbox=(747,402,1271,1038) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.23s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.27s tid=0 hand#0 area=0.11695 min=0.00200 OK
-  [hand-dbg]   hand_center=(985,593) person_bbox=(752,364,1268,1029) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.27s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.30s tid=0 hand#0 area=0.11982 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,560) person_bbox=(752,319,1268,1033) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.30s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.33s tid=0 hand#0 area=0.12055 min=0.00200 OK
-  [hand-dbg]   hand_center=(986,535) person_bbox=(748,280,1261,1013) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.33s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.37s tid=0 hand#0 area=0.12529 min=0.00200 OK
-  [hand-dbg]   hand_center=(985,510) person_bbox=(744,249,1265,1006) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.37s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.40s tid=0 hand#0 area=0.12992 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,484) person_bbox=(748,220,1269,1005) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.40s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.43s tid=0 hand#0 area=0.13082 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,460) person_bbox=(748,194,1270,985) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.43s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.47s tid=0 hand#0 area=0.13140 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,438) person_bbox=(739,167,1270,989) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.47s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.50s tid=0 hand#0 area=0.13045 min=0.00200 OK
-  [hand-dbg]   hand_center=(985,420) person_bbox=(740,156,1270,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.50s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.53s tid=0 hand#0 area=0.13275 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,406) person_bbox=(740,143,1270,971) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.53s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.57s tid=0 hand#0 area=0.13404 min=0.00200 OK
-  [hand-dbg]   hand_center=(990,395) person_bbox=(741,129,1270,975) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.57s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.60s tid=0 hand#0 area=0.13506 min=0.00200 OK
-  [hand-dbg]   hand_center=(990,391) person_bbox=(740,125,1270,976) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.60s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.63s tid=0 hand#0 area=0.13682 min=0.00200 OK
-  [hand-dbg]   hand_center=(991,389) person_bbox=(740,124,1272,972) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.63s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.67s tid=0 hand#0 area=0.13746 min=0.00200 OK
-  [hand-dbg]   hand_center=(992,388) person_bbox=(740,123,1273,971) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.67s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.70s tid=0 hand#0 area=0.13766 min=0.00200 OK
-  [hand-dbg]   hand_center=(992,388) person_bbox=(741,123,1274,968) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.70s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.74s tid=0 hand#0 area=0.13806 min=0.00200 OK
-  [hand-dbg]   hand_center=(992,388) person_bbox=(742,124,1276,969) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.74s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.77s tid=0 hand#0 area=0.13858 min=0.00200 OK
-  [hand-dbg]   hand_center=(993,390) person_bbox=(741,125,1277,975) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.77s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.80s tid=0 hand#0 area=0.13787 min=0.00200 OK
-  [hand-dbg]   hand_center=(993,390) person_bbox=(743,124,1276,969) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.80s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.84s tid=0 hand#0 area=0.13844 min=0.00200 OK
-  [hand-dbg]   hand_center=(992,391) person_bbox=(740,125,1277,971) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.84s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.87s tid=0 hand#0 area=0.13818 min=0.00200 OK
-  [hand-dbg]   hand_center=(991,391) person_bbox=(739,125,1276,972) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.87s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.90s tid=0 hand#0 area=0.13857 min=0.00200 OK
-  [hand-dbg]   hand_center=(991,391) person_bbox=(739,125,1275,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.90s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.94s tid=0 hand#0 area=0.13936 min=0.00200 OK
-  [hand-dbg]   hand_center=(991,391) person_bbox=(741,123,1273,973) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.94s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=1.97s tid=0 hand#0 area=0.13922 min=0.00200 OK
-  [hand-dbg]   hand_center=(990,391) person_bbox=(740,123,1272,976) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=1.97s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.00s tid=0 hand#0 area=0.13854 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,390) person_bbox=(740,123,1272,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.00s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.04s tid=0 hand#0 area=0.13824 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,389) person_bbox=(738,124,1273,978) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.04s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.07s tid=0 hand#0 area=0.13820 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,389) person_bbox=(740,123,1271,974) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.07s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.10s tid=0 hand#0 area=0.13888 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,388) person_bbox=(737,124,1272,979) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.10s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.14s tid=0 hand#0 area=0.13946 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,387) person_bbox=(738,123,1272,970) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.14s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.17s tid=0 hand#0 area=0.13751 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,385) person_bbox=(737,121,1273,970) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.17s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.20s tid=0 hand#0 area=0.13793 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,385) person_bbox=(736,119,1273,969) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.20s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.24s tid=0 hand#0 area=0.13864 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,384) person_bbox=(737,121,1272,965) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.24s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.27s tid=0 hand#0 area=0.13879 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,384) person_bbox=(736,119,1272,972) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.27s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.30s tid=0 hand#0 area=0.13869 min=0.00200 OK
-  [hand-dbg]   hand_center=(989,383) person_bbox=(736,116,1272,973) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.30s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.34s tid=0 hand#0 area=0.13850 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,381) person_bbox=(736,115,1271,969) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.34s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.37s tid=0 hand#0 area=0.13891 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,380) person_bbox=(736,111,1269,983) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.37s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.40s tid=0 hand#0 area=0.13879 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,380) person_bbox=(736,113,1269,979) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.40s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.44s tid=0 hand#0 area=0.13977 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,378) person_bbox=(736,110,1269,982) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.44s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.47s tid=0 hand#0 area=0.14095 min=0.00200 OK
-  [hand-dbg]   hand_center=(988,377) person_bbox=(737,110,1268,971) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.47s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.50s tid=0 hand#0 area=0.14067 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,376) person_bbox=(737,111,1269,968) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.50s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.54s tid=0 hand#0 area=0.14194 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,376) person_bbox=(735,112,1269,978) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.54s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.57s tid=0 hand#0 area=0.14066 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,375) person_bbox=(735,111,1269,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.57s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.60s tid=0 hand#0 area=0.14154 min=0.00200 OK
-  [hand-dbg]   hand_center=(987,376) person_bbox=(735,112,1268,974) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.60s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.64s tid=0 hand#0 area=0.14151 min=0.00200 OK
-  [hand-dbg]   hand_center=(986,375) person_bbox=(735,110,1268,976) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.64s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.67s tid=0 hand#0 area=0.14104 min=0.00200 OK
-  [hand-dbg]   hand_center=(986,375) person_bbox=(736,110,1267,968) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.67s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.70s tid=0 hand#0 area=0.14127 min=0.00200 OK
-  [hand-dbg]   hand_center=(985,375) person_bbox=(737,111,1267,969) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.70s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.74s tid=0 hand#0 area=0.14100 min=0.00200 OK
-  [hand-dbg]   hand_center=(985,375) person_bbox=(737,111,1266,971) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.74s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.77s tid=0 hand#0 area=0.13940 min=0.00200 OK
-  [hand-dbg]   hand_center=(984,375) person_bbox=(736,111,1266,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.77s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.80s tid=0 hand#0 area=0.13892 min=0.00200 OK
-  [hand-dbg]   hand_center=(983,374) person_bbox=(735,111,1266,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.80s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.84s tid=0 hand#0 area=0.13944 min=0.00200 OK
-  [hand-dbg]   hand_center=(983,374) person_bbox=(735,112,1265,972) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.84s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.87s tid=0 hand#0 area=0.13955 min=0.00200 OK
-  [hand-dbg]   hand_center=(982,375) person_bbox=(734,112,1265,973) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.87s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.90s tid=0 hand#0 area=0.13892 min=0.00200 OK
-  [hand-dbg]   hand_center=(982,374) person_bbox=(734,112,1265,972) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.90s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.94s tid=0 hand#0 area=0.13788 min=0.00200 OK
-  [hand-dbg]   hand_center=(982,374) person_bbox=(734,113,1260,979) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.94s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=2.97s tid=0 hand#0 area=0.13365 min=0.00200 OK
-  [hand-dbg]   hand_center=(982,374) person_bbox=(736,113,1241,977) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=False fingers_closed=False
-  [hand-dbg] t=2.97s tid=0 state: 1→1 hdet=True
-  [hand-dbg] t=3.04s tid=0 hand#0 area=0.11948 min=0.00200 OK
-  [hand-dbg]   hand_center=(979,377) person_bbox=(737,111,1217,965) in_bbox=True
-  [hand-dbg]   state=1 palm_open=True thumb_in=True fingers_closed=False
-  [hand-dbg] t=3.04s tid=0 state: 1→2 hdet=True
-  [hand-dbg] t=3.10s tid=0 hand#0 area=0.11253 min=0.00200 OK
-  [hand-dbg]   hand_center=(978,385) person_bbox=(741,113,1180,955) in_bbox=True
-  [hand-dbg]   state=2 palm_open=True thumb_in=True fingers_closed=False
-  [hand-dbg] t=3.10s tid=0 state: 2→2 hdet=True
-  เสร็จใน 17.5s — พบ 0 predicted events
+  เสร็จใน 19.1s — พบ 1 predicted events
 ▶ กำลังประมวลผล: hand6.mp4 ...
 HandSOSDetector ready ✓
   [hand-dbg] t=1.00s tid=0 hand#0 area=0.06778 min=0.00200 OK
@@ -8053,13 +7795,13 @@ HandSOSDetector ready ✓
   [hand-dbg]   state=0 palm_open=True thumb_in=True fingers_closed=False
   [hand-dbg] t=10.08s tid=0 state: 0→1 hdet=True
   [hand-dbg] t=10.28s tid=0 state: 1→0 hdet=False
-  เสร็จใน 24.7s — พบ 2 predicted events
+  เสร็จใน 25.9s — พบ 2 predicted events
 
 ======================================================================
 Event Type         TP   FP   FN   Precision    Recall      F1
 ----------------------------------------------------------------------
 fall                5    0    0        1.00      1.00    1.00
-hand_sos            3    0    1        1.00      0.75    0.86
+hand_sos            3    0    0        1.00      1.00    1.00
 ----------------------------------------------------------------------
 Total video time: 0.03 hr | False alarms/hour (all types): 0.0
 ======================================================================
