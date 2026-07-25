@@ -1,0 +1,14 @@
+{
+  "_comment": "ตัวอย่าง object_left — เจ้าของวางกระเป๋าไว้บนโต๊ะแล้วเดินออกจากกล้อง ไม่กลับมาในคลิป",
+  "video": "obj_01.avi",
+  "location": "ห้องสมุด",
+  "events": [
+    {
+      "event_type": "object_left",
+      "start_sec": 0.48,
+      "end_sec": 1.13,
+      "object_class": "backpack",
+      "notes": "เจ้าของวางกระเป๋าบนโต๊ะที่ t=15s แล้วเดินออกจากกล้องถาวร ควร trigger object_left หลังผ่าน left_behind_seconds ของ zone นี้"
+    }
+  ]
+}

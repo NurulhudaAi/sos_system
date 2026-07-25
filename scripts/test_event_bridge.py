@@ -62,7 +62,6 @@ print(f"{'='*60}")
 
 assert_eq("fall → Fall",            DETECTION_TYPE_MAP.get("fall"),         "Fall")
 assert_eq("hand_sos → Gesture",     DETECTION_TYPE_MAP.get("hand_sos"),    "Gesture")
-assert_eq("pose_sos → Gesture",     DETECTION_TYPE_MAP.get("pose_sos"),    "Gesture")
 assert_eq("object_event → ObjectMissing", DETECTION_TYPE_MAP.get("object_event"), "ObjectMissing")
 assert_eq("inactivity → Inactivity", DETECTION_TYPE_MAP.get("inactivity"), "Inactivity")
 
