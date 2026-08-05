@@ -146,12 +146,12 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             {
                 "bbox": o["bbox"],
                 "confidence": o.get("conf", o.get("confidence", 0.0)),
-                "class_name": str(o.get("class_id", "object")),
+                "class_name": o.get("class_name", str(o.get("class_id", "object"))),
             }
             for o in objects_raw
         ]
 
-        for alert in guardian.update(frame, odets, gp, source_id=source_id, location=location):
+        for alert in guardian.update(frame, odets, gp, source_id=source_id, location=location, t_sec=t_sec):
             predictions.append({
                 "video": video_path.name,
                 "event_type": alert["event_type"],

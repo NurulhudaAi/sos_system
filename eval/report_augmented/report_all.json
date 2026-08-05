@@ -1,0 +1,13 @@
+{
+  "augmentation": "all",
+  "parameters": {
+    "target_height": 480,
+    "brightness": 0.3,
+    "noise_std": 30.0,
+    "blur_kernel": 7
+  },
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.0,
+  "false_alarms_per_hour": null,
+  "metrics": {}
+}

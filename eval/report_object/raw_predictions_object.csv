@@ -1,0 +1,5 @@
+video,event_type,object_id,object_class,t_sec,confidence,owner_track_id,suspect_track_id,matched
+obj_01.avi,object_left,,suitcase,67.07,0.5201719403266907,,,True
+obj_03.avi,object_theft,,dog,24.02,0.30502182245254517,,,False
+obj_03.avi,object_theft,,skateboard,36.44,0.3839360475540161,,,False
+obj_03.avi,object_left,,skateboard,58.06,0.44279876351356506,,,True

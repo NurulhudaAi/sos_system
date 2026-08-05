@@ -45,6 +45,18 @@ class ObjectGuardian:
         # occlusion, so a single dropped frame doesn't wipe first_seen
         self.track_max_missed   = cfg.get("track_max_missed", 5)
 
+        # Classes to ignore — static furniture that triggers false object_left
+        # alerts in rooms where no person is nearby.
+        _default_ignore = {
+            "chair", "dining table", "bench", "couch", "bed",
+            "toilet", "oven", "tv", "sink", "refrigerator",
+            "parking meter", "fire hydrant", "stop sign",
+            "traffic light", "bird",
+        }
+        self.ignore_classes = set(
+            cfg.get("ignore_classes", _default_ignore)
+        )
+
         # state
         self._tracked: Dict[int, dict] = {}   # track_id -> state
         self._next_track_id = 0
@@ -106,13 +118,17 @@ class ObjectGuardian:
         people:  list,
         source_id: str = "",
         location:  str = "",
+        t_sec: float = None,
     ) -> List[dict]:
         """
         อัพเดทสถานะทุก frame
         คืนค่า list ของ alert dict เมื่อมีเหตุการณ์
+        t_sec: video timestamp (seconds). If provided, used instead of
+               wall-clock time so that offline/faster-than-realtime
+               evaluation produces correct elapsed times.
         """
         alerts = []
-        now    = time.time()
+        now    = t_sec if t_sec is not None else time.time()
         seen_track_ids = set()
 
         for obj in objects:
@@ -122,6 +138,10 @@ class ObjectGuardian:
 
             bbox       = obj.get("bbox", [0, 0, 0, 0])
             class_name = obj.get("class_name", "object")
+
+            # Skip static/furniture classes that cause false positives
+            if class_name in self.ignore_classes:
+                continue
 
             # [FIX] match to existing track via IoU instead of a
             # rounded-position key, so jitter doesn't reset first_seen

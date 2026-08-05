@@ -1,0 +1,23 @@
+{
+  "tolerance_sec": 10.0,
+  "total_video_hours": 0.19934285211137065,
+  "false_alarms_per_hour": 10.03,
+  "metrics": {
+    "object_left": {
+      "tp": 2,
+      "fp": 0,
+      "fn": 1,
+      "precision": 1.0,
+      "recall": 0.6667,
+      "f1": 0.8
+    },
+    "object_theft": {
+      "tp": 0,
+      "fp": 2,
+      "fn": 0,
+      "precision": 0.0,
+      "recall": null,
+      "f1": null
+    }
+  }
+}

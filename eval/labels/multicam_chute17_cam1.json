@@ -1,0 +1,13 @@
+{
+  "video": "chute17_cam1.avi",
+  "location": "multicam_chute17",
+  "events": [
+    {
+      "event_type": "fall",
+      "start_sec": 6.3,
+      "end_sec": 6.55,
+      "notes": "auto-generated from data_tuple3.csv (frames 756-786)"
+    }
+  ],
+  "_source": "MultiCam Fall Dataset: chute17/cam1.avi | 1 fall event(s), 1 confounding segment(s) | FPS=120.0"
+}
