@@ -2,6 +2,18 @@
 """
 detectors/object_guardian.py
 ตรวจจับของลืมทิ้ง (object left-behind) และของถูกขโมย (object theft)
+
+[FIX — tracking key instability]
+เดิม: key = f"{class_name}_{int(bbox[0])}_{int(bbox[1])}"
+ปัญหา: bbox jitter เล็กน้อยระหว่างเฟรม (แสง/model noise) ทำให้
+int(bbox[0]) เปลี่ยนค่าไปมา แม้วัตถุจะอยู่นิ่งสนิท -> key เปลี่ยน ->
+ถูกมองว่าเป็น object ใหม่ทุกครั้ง -> first_seen ถูก reset ตลอด ->
+elapsed แทบไม่มีทางไต่ถึง left_behind_seconds/theft_seconds ได้เลย
+(อาการเดียวกับ state-machine fragility ที่เจอตอน hand_sos ก่อนหน้า)
+
+แก้: จับคู่ track เดิมด้วย IoU (เหมือน SimpleTracker ใน main.py)
+แทนตำแหน่งที่ปัดเศษ -> object นิ่งบนโต๊ะยังคง track เดิมต่อเนื่อง
+แม้ bbox จะสั่นไปมาบ้างในแต่ละเฟรม
 """
 import cv2
 import time
@@ -24,9 +36,30 @@ class ObjectGuardian:
         self.theft_seconds      = cfg.get("theft_seconds", 10)
         self.min_confidence     = cfg.get("min_confidence", 0.4)
         self.iou_threshold      = cfg.get("iou_threshold", 0.4)
+        # [FIX] separate, lower IoU threshold just for re-identifying the
+        # same physical object across frames (person-proximity IoU above
+        # stays as-is; this one governs object-to-track matching)
+        self.track_iou_threshold = cfg.get("track_iou_threshold", 0.3)
+        # [FIX] how many consecutive missed frames before a track is
+        # dropped — small tolerance for a missed detection or brief
+        # occlusion, so a single dropped frame doesn't wipe first_seen
+        self.track_max_missed   = cfg.get("track_max_missed", 5)
+
+        # Classes to ignore — static furniture that triggers false object_left
+        # alerts in rooms where no person is nearby.
+        _default_ignore = {
+            "chair", "dining table", "bench", "couch", "bed",
+            "toilet", "oven", "tv", "sink", "refrigerator",
+            "parking meter", "fire hydrant", "stop sign",
+            "traffic light", "bird",
+        }
+        self.ignore_classes = set(
+            cfg.get("ignore_classes", _default_ignore)
+        )
 
         # state
-        self._tracked: Dict[str, dict] = {}   # object_key → state
+        self._tracked: Dict[int, dict] = {}   # track_id -> state
+        self._next_track_id = 0
         self._alerts_sent: set          = set()
 
     # ─── IOU helper ──────────────────────────────────────────────────────────
@@ -45,6 +78,24 @@ class ObjectGuardian:
             if self._iou(bbox, p["bbox"]) > self.iou_threshold:
                 return True
         return False
+
+    # [FIX] IoU-based track matching — replaces the old rounded-position key
+    def _match_track(self, class_name: str, bbox) -> Optional[int]:
+        """Find an existing track of the same class whose last-seen bbox
+        overlaps this detection above track_iou_threshold. Returns the
+        track_id, or None if no match (caller should create a new track)."""
+        best_id = None
+        best_iou = 0.0
+        for tid, t in self._tracked.items():
+            if t["class_name"] != class_name:
+                continue
+            iou = self._iou(bbox, t["bbox"])
+            if iou > best_iou:
+                best_iou = iou
+                best_id = tid
+        if best_iou >= self.track_iou_threshold:
+            return best_id
+        return None
 
     # ─── Snapshot ────────────────────────────────────────────────────────────
 
@@ -67,14 +118,18 @@ class ObjectGuardian:
         people:  list,
         source_id: str = "",
         location:  str = "",
+        t_sec: float = None,
     ) -> List[dict]:
         """
         อัพเดทสถานะทุก frame
         คืนค่า list ของ alert dict เมื่อมีเหตุการณ์
+        t_sec: video timestamp (seconds). If provided, used instead of
+               wall-clock time so that offline/faster-than-realtime
+               evaluation produces correct elapsed times.
         """
         alerts = []
-        now    = time.time()
-        seen_keys = set()
+        now    = t_sec if t_sec is not None else time.time()
+        seen_track_ids = set()
 
         for obj in objects:
             conf  = obj.get("confidence", 0.0)
@@ -83,13 +138,21 @@ class ObjectGuardian:
 
             bbox       = obj.get("bbox", [0, 0, 0, 0])
             class_name = obj.get("class_name", "object")
-            key        = f"{class_name}_{int(bbox[0])}_{int(bbox[1])}"
-            seen_keys.add(key)
+
+            # Skip static/furniture classes that cause false positives
+            if class_name in self.ignore_classes:
+                continue
+
+            # [FIX] match to existing track via IoU instead of a
+            # rounded-position key, so jitter doesn't reset first_seen
+            tid = self._match_track(class_name, bbox)
 
             nearby = self._person_nearby(bbox, people)
 
-            if key not in self._tracked:
-                self._tracked[key] = {
+            if tid is None:
+                tid = self._next_track_id
+                self._next_track_id += 1
+                self._tracked[tid] = {
                     "first_seen":    now,
                     "last_seen":     now,
                     "bbox":          bbox,
@@ -97,16 +160,20 @@ class ObjectGuardian:
                     "confidence":    conf,
                     "had_person":    nearby,
                     "alert_sent":    False,
+                    "missed":        0,
                 }
             else:
-                t = self._tracked[key]
+                t = self._tracked[tid]
                 t["last_seen"]  = now
                 t["bbox"]       = bbox
                 t["confidence"] = conf
+                t["missed"]     = 0
                 if nearby:
                     t["had_person"] = True
 
-            t = self._tracked[key]
+            seen_track_ids.add(tid)
+
+            t = self._tracked[tid]
             elapsed = now - t["first_seen"]
 
             # ── ของถูกขโมย: เคยมีคนอยู่ใกล้ แล้วคนหายไป object ยังอยู่ ──
@@ -150,17 +217,23 @@ class ObjectGuardian:
                 t["alert_sent"] = True
                 logger.info(f"[ObjectGuardian] LEFT BEHIND detected: {class_name} @ {location}")
 
-        # ── ลบ object ที่หายจาก frame ──
-        lost_keys = set(self._tracked.keys()) - seen_keys
-        for k in lost_keys:
-            del self._tracked[k]
+        # ── track ที่หายไปจาก frame นี้ ──
+        # [FIX] อนุโลม track_max_missed เฟรมก่อนลบทิ้ง แทนที่จะลบทันที
+        # ที่พลาดไปเฟรมเดียว (เช่น detection กระพริบ) ป้องกัน first_seen
+        # โดน reset จากการ miss ชั่วคราว
+        lost_ids = set(self._tracked.keys()) - seen_track_ids
+        for tid in lost_ids:
+            t = self._tracked[tid]
+            t["missed"] += 1
+            if t["missed"] > self.track_max_missed:
+                del self._tracked[tid]
 
         return alerts
 
     # ─── Draw overlays ───────────────────────────────────────────────────────
 
     def draw(self, frame):
-        for key, t in self._tracked.items():
+        for tid, t in self._tracked.items():
             x1, y1, x2, y2 = [int(v) for v in t["bbox"]]
             color  = (0, 0, 255) if t["alert_sent"] else (0, 165, 255)
             label  = f"{t['class_name']} {int(time.time()-t['first_seen'])}s"

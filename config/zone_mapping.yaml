@@ -1,0 +1,45 @@
+# Zone Mapping Configuration
+# แปลง location ภาษาไทย → zone_id ตาม PRD format
+# ใช้โดย EventBridge เพื่อ map detection events → PRD schema
+
+zones:
+  - zone_id: "Bedroom-1"
+    location: "ห้องนอน"
+    type: "Bedroom"
+    escalation_policy:
+      high_timeout: 300        # 5 min (seconds)
+      medium_timeout: 900      # 15 min
+      low_timeout: 3600        # 60 min
+    cooldown_window: 300       # 5 min cooldown after resolve
+    dedup_window: 30           # 30 sec dedup window
+
+  - zone_id: "Hallway-1"
+    location: "ห้องโถง"
+    type: "Hallway"
+    escalation_policy:
+      high_timeout: 300
+      medium_timeout: 900
+      low_timeout: 3600
+    cooldown_window: 300
+    dedup_window: 30
+
+  - zone_id: "Entrance-1"
+    location: "ประตูหน้า"
+    type: "Entrance"
+    escalation_policy:
+      high_timeout: 180        # 3 min — more critical zone
+      medium_timeout: 600      # 10 min
+      low_timeout: 1800        # 30 min
+    cooldown_window: 300
+    dedup_window: 30
+
+# Default policy for unmapped locations
+default:
+  zone_id_prefix: "Unknown"
+  type: "General"
+  escalation_policy:
+    high_timeout: 300
+    medium_timeout: 900
+    low_timeout: 3600
+  cooldown_window: 300
+  dedup_window: 30

@@ -2,7 +2,7 @@ import os
 import requests
 import logging
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import numpy as np
 
@@ -34,8 +34,8 @@ class HelpRequestDispatcher:
         if not self.enabled:
             return False
 
-        if event_type == "hand_sos":
-            return True  # ALL hand SOS events
+        if event_type in ("hand_sos"):
+            return True  # ALL hand SOS — explicit human gesture for help
 
         if event_type == "fall" and severity >= 2:  # MED (1) < HIGH (2) <= CRITICAL (3)
             return True
@@ -67,7 +67,7 @@ class HelpRequestDispatcher:
                 "severity": severity,
                 "severity_name": severity_name,
                 "location": location,
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
                 "track_id": track_id,
                 "source_id": source_id,
                 "image_path": image_path,  # FILE PATH ONLY

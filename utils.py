@@ -170,10 +170,10 @@ class Visualizer:
     def banner(self, frame, atype):
         c = {"fall_warning": (0, 165, 255),
              "fall":         (0, 0, 220),
-             "hand_sos":     (0, 200, 0)}.get(atype, (0, 0, 220))
+             "hand_sos":     (0, 200, 0)}
         l = {"fall_warning": "FALL WARNING",
              "fall":         "FALL DETECTED",
-             "hand_sos":     "SILENT SOS HAND"}.get(atype, "ALERT")
+             "hand_sos":     "SILENT SOS HAND"}
         h, w = frame.shape[:2]
         cv2.rectangle(frame, (0, h - 50), (w, h), c, -1)
         cv2.putText(frame, f"!!! {l} !!!", (20, h - 14),

@@ -1,0 +1,10 @@
+{
+  "augmentation": "dark",
+  "parameters": {
+    "brightness": 0.3
+  },
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.0,
+  "false_alarms_per_hour": null,
+  "metrics": {}
+}

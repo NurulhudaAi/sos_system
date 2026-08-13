@@ -1,7 +1,7 @@
 import cv2, yaml, time, logging, requests, threading, os, json, uuid
 from pathlib import Path
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 ALERT_DIR = Path("alerts")
@@ -36,8 +36,13 @@ class ZoneManager:
         try:
             d = yaml.safe_load(Path(path).read_text())
             self.zones = d["cameras"][cam_id]["zones"]
-        except Exception:
-            pass
+        except Exception as e:
+            # [FIX] previously silent — a bad path or missing cam_id silently
+            # disables zone filtering (in_zone() then returns True for
+            # everything). Now at least visible in logs/console.
+            print(f"⚠️  [ZoneManager] Could not load zones from {path} "
+                  f"(cam_id={cam_id!r}): {e} — zone filtering disabled, "
+                  f"full frame will be used")
 
     def in_zone(self, cx, cy):
         if not self.zones:
@@ -273,20 +278,44 @@ class AlertDispatcher:
             pass
 
         # ── MongoDB persist ───────────────────────────────────────────────
+        # [FIX] was calling self.db.insert_sos_event() which does not exist in
+        # database.py (only insert_incident() does) — this branch would have
+        # raised on first use. Corrected to match the real signature.
+        #
+        # NOTE: main.py intentionally does NOT pass db= into AlertDispatcher.
+        # main.py already calls insert_incident() itself right after
+        # dispatch() returns an image path. If db= were wired here too, every
+        # fall/hand_sos event would be written to MongoDB twice (the same
+        # double-write bug fixed earlier for alert_logger.log_sos_event()).
+        # Only pass db= here if you also remove the insert_incident() calls
+        # from main.py.
         if self.db:
             try:
-                source_id  = extra.get("source_id") if isinstance(extra, dict) else None
-                source_path = extra.get("source")   if isinstance(extra, dict) else None
-                track_id   = extra.get("track_id")  if isinstance(extra, dict) else None
-                location   = extra.get("location")  if isinstance(extra, dict) else None
+                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "object_event": "ObjectMissing"}
+                _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
+                source_id   = extra.get("source_id") if isinstance(extra, dict) else None
+                source_path = extra.get("source")    if isinstance(extra, dict) else None
+                track_id    = extra.get("track_id")  if isinstance(extra, dict) else None
+                location    = extra.get("location")  if isinstance(extra, dict) else None
                 self.db.insert_incident(
-                    event_uuid=event_uuid, event_type=atype,
-                    severity=level, severity_name=level_name,
-                    source_id=source_id or source_path, source_path=source_path,
-                    location=location, track_id=track_id,
-                    image_path=str(path),
-                    meta_path=str(path.with_suffix('.json')),
-                    flags=flags, extra=extra or {},
+                    event_uuid     = event_uuid,
+                    detection_type = _det_type_map.get(atype, "Fall"),
+                    zone           = location or "Unknown-0",
+                    confidence     = float(extra.get("confidence", 0.0)) if isinstance(extra, dict) else 0.0,
+                    timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    severity       = _sev_map.get(level, "High"),
+                    metadata       = {
+                        "cameraId": source_id or source_path,
+                        "personCount": 1,
+                        "trackId": track_id,
+                        "imagePath": str(path),
+                        "metaPath": str(path.with_suffix('.json')),
+                        "originalEventType": atype,
+                        "originalSeverity": level,
+                        "originalSeverityName": level_name,
+                        "flags": flags,
+                        "extra": extra or {},
+                    },
                 )
             except Exception as e:
                 self._log.warning(f"MongoDB event insert failed: {e}")

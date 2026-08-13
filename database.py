@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-database.py — MongoDB backend สำหรับ SOS System
+database.py — MongoDB backend สำหรับ SOS System (PRD Schema)
 เชื่อมกับ Atlas cluster: iam database → cctv_incidents collection
+
+Schema ตรงกับ PRD Section 10.1 — Incident Collection:
+  detectionType, zone, state, severity, confidence,
+  duplicateCount, escalationLevel, escalationHistory,
+  reviewedBy, resolvedBy, metadata, etc.
 """
 import os
 import logging
 import threading
+import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List
 
@@ -15,10 +21,11 @@ from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
 logger = logging.getLogger("database")
 
 # ─── Config จาก .env ──────────────────────────────────────────────────────────
-MONGODB_URI          = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-MONGODB_DB_NAME      = os.getenv("MONGODB_DB_NAME", "iam")
-INCIDENTS_COLLECTION = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
-SNAPSHOT_SERVER_URL  = os.getenv("SNAPSHOT_SERVER_URL", "http://127.0.0.1:8000")
+MONGODB_URI            = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB_NAME        = os.getenv("MONGODB_DB_NAME", "iam")
+INCIDENTS_COLLECTION   = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
+SNAPSHOT_SERVER_URL    = os.getenv("SNAPSHOT_SERVER_URL", "http://127.0.0.1:8000")
+SOURCE_EVENTS_COLLECTION = os.getenv("MONGODB_SOURCE_EVENTS_COLLECTION", "source_events")
 
 # ─── Thread-local connection pool (1 client ต่อ thread) ──────────────────────
 _local = threading.local()
@@ -87,97 +94,130 @@ def _create_indexes(db):
     """สร้าง index ที่จำเป็น — เรียกครั้งเดียวตอน startup"""
     try:
         col = db[INCIDENTS_COLLECTION]
+
+        # PRD indexes
         col.create_index("event_uuid", unique=True, sparse=True)
-        col.create_index([("created_at", -1), ("acknowledged", 1), ("source_id", 1)])
+        col.create_index([("zone", 1), ("detectionType", 1), ("timestamp", 1)])
+        col.create_index([("state", 1), ("createdAt", -1)])
+        col.create_index([("severity", 1), ("state", 1)])
+        col.create_index([("createdAt", -1)])
+        col.create_index([("escalationLevel", 1)])
         try:
-            col.create_index([("created_at", 1)], expireAfterSeconds=2592000)  # TTL 30 วัน
+            col.create_index([("createdAt", 1)], expireAfterSeconds=2592000)  # TTL 30 วัน
         except Exception:
             pass  # index อาจมีอยู่แล้ว
 
+        # Other collections
         db.object_events.create_index([("created_at", -1)])
         db.object_events.create_index([("source_id", 1), ("created_at", -1)])
         db.help_requests.create_index("event_uuid")
         db.help_requests.create_index([("status", 1), ("sent_at", -1)])
-
-        logger.info("✅ MongoDB indexes verified")
+        db[SOURCE_EVENTS_COLLECTION].create_index([("created_at", -1)])
+        db[SOURCE_EVENTS_COLLECTION].create_index([("source_id", 1), ("created_at", -1)])
+        logger.info("✅ MongoDB indexes verified (PRD schema)")
     except Exception as e:
         logger.warning(f"⚠️  Index creation warning: {e}")
 
 
-# ─── Write: SOS Event ─────────────────────────────────────────────────────────
+# ─── Write: Incident (PRD Schema) ────────────────────────────────────────────
 
 def insert_incident(
-    event_uuid:    str,
-    event_type:    str,
-    severity:      int,
-    severity_name: str,
-    source_id:     Optional[str]       = None,
-    source_path:   Optional[str]       = None,
-    location:      Optional[str]       = None,
-    track_id:      Optional[int]       = None,
-    image_path:    Optional[str]       = None,
-    meta_path:     Optional[str]       = None,
-    flags:         Optional[List[str]] = None,
-    extra:         Optional[Dict]      = None,
+    event_uuid:     str,
+    detection_type: str,
+    zone:           str,
+    confidence:     float,
+    timestamp:      str,
+    severity:       str,
+    metadata:       Optional[Dict] = None,
 ) -> str:
-    """บันทึก SOS event → cctv_incidents. คืนค่า event_uuid"""
+    """
+    บันทึก incident ใน PRD schema → cctv_incidents collection
+
+    Document structure ตรงกับ PRD Section 10.1:
+    {
+        "event_uuid":         "uuid-v4",
+        "detectionType":      "Fall | Inactivity | Gesture | ObjectMissing",
+        "zone":               "Hallway-B2",
+        "state":              "Open | InReview | Escalated | Resolved | Closed | Archived",
+        "severity":           "High | Medium | Low",
+        "confidence":         0.95,
+        "duplicateCount":     1,
+        "lastSeenAt":         datetime,
+        "escalationLevel":    0,
+        "escalationHistory":  [],
+        "reviewedBy":         null,
+        "reviewedAt":         null,
+        "resolvedBy":         null,
+        "resolvedAt":         null,
+        "resolutionNotes":    "",
+        "timestamp":          datetime,
+        "createdAt":          datetime,
+        "createdBy":          "system",
+        "closedAt":           null,
+        "archivedAt":         null,
+        "metadata":           { "cameraId": "cam-001", ... }
+    }
+    """
     db  = _get_db()
     now = _utcnow()
 
+    # Parse timestamp string → datetime
+    try:
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        ts = now
+
     doc = {
         # ─── ID ───────────────────────────────────────
-        "event_uuid":   event_uuid,
-        "incident_id":  event_uuid,
+        "event_uuid":         event_uuid,
 
-        # ─── เวลา ─────────────────────────────────────
-        "detected_at":  now,
-        "created_at":   now,
-        "updated_at":   now,
+        # ─── Detection ────────────────────────────────
+        "detectionType":      detection_type,
+        "zone":               zone,
+        "confidence":         float(confidence),
+        "timestamp":          ts,
 
-        # ─── ประเภทและความรุนแรง ──────────────────────
-        "event_type":    event_type,
-        "severity":      severity,
-        "severity_name": severity_name,
+        # ─── State Machine (PRD Section 6) ────────────
+        "state":              "Open",
+        "severity":           severity,
 
-        # ─── กล้องและสถานที่ ──────────────────────────
-        "source_id":    source_id,
-        "camera_id":    source_id,
-        "source_path":  source_path,
-        "location":     location,
-        "track_id":     track_id,
+        # ─── Deduplication (PRD FR-NEW-004) ───────────
+        "duplicateCount":     1,
+        "lastSeenAt":         ts,
 
-        # ─── ไฟล์ snapshot ────────────────────────────
-        "image_path":   image_path,
-        "snapshot_url": path_to_snapshot_url(image_path),
-        "meta_path":    meta_path,
+        # ─── Escalation (PRD FR-NEW-003) ──────────────
+        "escalationLevel":    0,
+        "escalationHistory":  [],
 
-        # ─── ข้อมูลเพิ่มเติม ─────────────────────────
-        "flags":        _bson_safe(flags or []),
-        "extra":        _bson_safe(extra or {}),
+        # ─── Operator Workflow ────────────────────────
+        "reviewedBy":         None,
+        "reviewedAt":         None,
+        "resolvedBy":         None,
+        "resolvedAt":         None,
+        "resolutionNotes":    "",
 
-        # ─── สถานะ ────────────────────────────────────
-        "status":       "new",
-        "acknowledged": 0,
-        "resolved_at":  None,
-        "notes":        "",
+        # ─── Timestamps ──────────────────────────────
+        "createdAt":          now,
+        "createdBy":          "system",
+        "closedAt":           None,
+        "archivedAt":         None,
 
-        # ─── ผู้รับผิดชอบ ─────────────────────────────
-        "responder": {
-            "staff_id":    None,
-            "accepted_at": None,
-            "resolved_at": None,
-        },
+        # ─── Metadata ────────────────────────────────
+        "metadata":           _bson_safe(metadata or {}),
     }
 
     try:
         db[INCIDENTS_COLLECTION].insert_one(doc)
-        logger.info(f"✅ SOS event inserted: {event_uuid} | {event_type} | {severity_name}")
+        logger.info(
+            f"✅ Incident inserted: {event_uuid} | "
+            f"{detection_type} | {zone} | {severity}"
+        )
         return event_uuid
     except DuplicateKeyError:
         logger.warning(f"⚠️  Duplicate event_uuid skipped: {event_uuid}")
         return event_uuid
     except Exception as e:
-        logger.error(f"❌ Failed to insert SOS event: {e}")
+        logger.error(f"❌ Failed to insert incident: {e}")
         raise
 
 
@@ -255,15 +295,46 @@ def insert_help_request(
         return False
 
 
+# ─── Write: Source Status ────────────────────────────────────────────────────
+
+def insert_source_status(
+    source_id: str,
+    source_path: str,
+    location: Optional[str] = None,
+    zone_id: Optional[str] = None,
+    status: str = "connected",
+    port: Optional[int] = None,
+    error: Optional[str] = None,
+) -> bool:
+    """บันทึกสถานะการเชื่อมต่อ source ลง collection แยก เพื่อไม่ปะปนกับ incident FRD"""
+    try:
+        db = _get_db()
+        db[SOURCE_EVENTS_COLLECTION].insert_one({
+            "created_at": _utcnow(),
+            "source_id": source_id,
+            "source_path": source_path,
+            "location": location,
+            "zone_id": zone_id,
+            "status": status,
+            "port": port,
+            "error": error,
+        })
+        logger.info(f"✅ Source status logged in {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
+        print(f"[DB] Source status inserted into {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Failed to log source status: {e}")
+        print(f"[DB] Source status insert failed: {source_id} | {e}")
+        return False
+
+
 # ─── Read helpers ─────────────────────────────────────────────────────────────
 
 def get_event_by_uuid(event_uuid: str) -> Optional[Dict]:
-    """ดึง event จาก UUID"""
+    """ดึง incident จาก UUID"""
     db = _get_db()
     try:
-        doc = db[INCIDENTS_COLLECTION].find_one({
-            "$or": [{"event_uuid": event_uuid}, {"incident_id": event_uuid}]
-        })
+        doc = db[INCIDENTS_COLLECTION].find_one({"event_uuid": event_uuid})
         if doc:
             doc["_id"] = str(doc["_id"])
         return doc
@@ -273,17 +344,15 @@ def get_event_by_uuid(event_uuid: str) -> Optional[Dict]:
 
 
 def acknowledge_event(event_id: str, notes: str = "") -> bool:
-    """Mark event เป็น acknowledged"""
+    """Transition: state → InReview (PRD FR-NEW-002)"""
     db = _get_db()
     try:
         result = db[INCIDENTS_COLLECTION].update_one(
-            {"$or": [{"event_uuid": event_id}, {"incident_id": event_id}]},
+            {"event_uuid": event_id},
             {"$set": {
-                "acknowledged": 1,
-                "status":       "resolved",
-                "resolved_at":  _utcnow(),
-                "updated_at":   _utcnow(),
-                "notes":        notes,
+                "state":        "InReview",
+                "reviewedAt":   _utcnow(),
+                "resolutionNotes": notes,
             }}
         )
         return result.modified_count > 0
@@ -293,16 +362,16 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
 
 
 def recent_events(limit: int = 50, unacked_only: bool = False, hours: int = 24) -> List[Dict]:
-    """ดึง event ล่าสุด — สำหรับ Dashboard"""
+    """ดึง incidents ล่าสุด — สำหรับ Dashboard"""
     db = _get_db()
     try:
-        query: Dict[str, Any] = {"created_at": {"$gte": _utcnow() - timedelta(hours=hours)}}
+        query: Dict[str, Any] = {"createdAt": {"$gte": _utcnow() - timedelta(hours=hours)}}
         if unacked_only:
-            query["acknowledged"] = 0
+            query["state"] = "Open"
         docs = list(
             db[INCIDENTS_COLLECTION]
             .find(query)
-            .sort("created_at", -1)
+            .sort("createdAt", -1)
             .limit(limit)
         )
         for d in docs:
@@ -314,24 +383,24 @@ def recent_events(limit: int = 50, unacked_only: bool = False, hours: int = 24) 
 
 
 def events_summary() -> Dict:
-    """สรุปจำนวน event แต่ละประเภท — สำหรับ Dashboard KPI"""
+    """สรุปจำนวน incidents แต่ละประเภท — สำหรับ Dashboard KPI"""
     db = _get_db()
     try:
         pipeline = [
-            {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
+            {"$group": {"_id": "$detectionType", "count": {"$sum": 1}}},
             {"$sort": {"_id": 1}}
         ]
         type_counts = {r["_id"]: r["count"] for r in db[INCIDENTS_COLLECTION].aggregate(pipeline)}
-        unacked     = db[INCIDENTS_COLLECTION].count_documents({"acknowledged": 0})
+        open_count  = db[INCIDENTS_COLLECTION].count_documents({"state": "Open"})
         obj_count   = db.object_events.count_documents({})
         return {
-            "by_type":           type_counts,
-            "unacknowledged":    unacked,
+            "by_type":            type_counts,
+            "open_incidents":     open_count,
             "objects_unattended": obj_count,
         }
     except Exception as e:
         logger.error(f"❌ events_summary error: {e}")
-        return {"by_type": {}, "unacknowledged": 0, "objects_unattended": 0}
+        return {"by_type": {}, "open_incidents": 0, "objects_unattended": 0}
 
 
 # ─── Health check ─────────────────────────────────────────────────────────────

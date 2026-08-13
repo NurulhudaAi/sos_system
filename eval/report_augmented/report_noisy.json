@@ -1,0 +1,10 @@
+{
+  "augmentation": "noisy",
+  "parameters": {
+    "std": 30.0
+  },
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.0,
+  "false_alarms_per_hour": null,
+  "metrics": {}
+}

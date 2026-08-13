@@ -1,0 +1,22 @@
+{
+  "augmentation": "all",
+  "parameters": {
+    "target_height": 480,
+    "brightness": 0.5,
+    "noise_std": 20.0,
+    "blur_kernel": 7
+  },
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.07555555555555557,
+  "false_alarms_per_hour": 0.0,
+  "metrics": {
+    "fall": {
+      "tp": 0,
+      "fp": 0,
+      "fn": 25,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": null
+    }
+  }
+}

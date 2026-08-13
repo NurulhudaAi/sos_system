@@ -1,0 +1,13 @@
+{
+  "video": "obj_01.avi",
+  "location": "ห้องโถง",
+  "events": [
+    {
+      "event_type": "object_left",
+      "start_sec": 30.0,
+      "end_sec": 73.0,
+      "object_class": "backpack",
+      "notes": "คนเข้ามาที่ t=8s วางกระเป๋าบนพื้น t=12-15s แล้วเดินออกไป กระเป๋าอยู่บนพื้นตลอดจนจบคลิป ควร trigger object_left หลัง left_behind_seconds"
+    }
+  ]
+}

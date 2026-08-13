@@ -1,0 +1,12 @@
+{
+  "video": "rtsp_hand2.mp4",
+  "location": "Learning Space",
+  "events": [
+    {
+      "event_type": "hand_sos",
+      "start_sec": 1.0,
+      "end_sec": 8.0,
+      "notes": "ทำท่ามือ SOS หน้ากล้อง RTSP"
+    }
+  ]
+}

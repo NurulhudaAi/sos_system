@@ -1,0 +1,23 @@
+{
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.029505555555555552,
+  "false_alarms_per_hour": 0.0,
+  "metrics": {
+    "fall": {
+      "tp": 5,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "hand_sos": {
+      "tp": 3,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  }
+}

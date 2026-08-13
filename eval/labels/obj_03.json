@@ -1,0 +1,12 @@
+{
+  "video": "obj_03.avi",
+  "location": "Lobby",
+  "events": [
+    {
+      "event_type": "object_left",
+      "start_sec": 60.0,
+      "end_sec": 110.0,
+      "notes": "มีของวางอยู่บนพื้นใกล้บันได เจ้าของเดินขึ้นบันได ของถูกทิ้งไว้ ควร trigger object_left"
+    }
+  ]
+}

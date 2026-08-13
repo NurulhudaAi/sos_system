@@ -14,7 +14,7 @@ import uuid  # [W3] top-level
 import cv2, sys, time, yaml, torch, requests, os
 from pathlib import Path
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
@@ -46,7 +46,8 @@ from help_request_dispatcher     import HelpRequestDispatcher
 from utils                       import preprocess, Visualizer, add_sos_badge
 from vlc_stream                  import VLCStreamManager
 from alert_logger                import alert_logger
-from database                    import insert_incident, insert_object_event, insert_help_request  # [W6] ลบ _get_db ที่ไม่ใช้
+import database as db_module
+from database                    import insert_incident, insert_object_event  # [W6] ลบ _get_db ที่ไม่ใช้
 
 cfg         = yaml.safe_load((ROOT / "config/thresholds.yaml").read_text())
 GEN         = cfg.get("general", {})
@@ -157,7 +158,7 @@ def main(src:str, port:int=8081, location:str=""):
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
-    zones   =ZoneManager(str(ROOT / "config/zones.yaml"),"default")  # ใช้ absolute path ป้องกัน cwd ≠ project root
+    zones   =ZoneManager(str(ROOT / "config/zones.yaml"), "default")  # [FIX] ROOT-anchored
     viz     =Visualizer()
 
     alert_cd     = GEN.get("alert_cooldown_seconds", cfg.get("fall",{}).get("cooldown_seconds",120))
@@ -167,18 +168,12 @@ def main(src:str, port:int=8081, location:str=""):
     if not webhook_url:
         print("⚠️  HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
 
-    # สร้าง DB wrapper สำหรับ HelpRequestDispatcher เพื่อให้ help_requests ถูก log
-    class _HelpDB:
-        """Thin wrapper ให้ HelpRequestDispatcher เรียก insert_help_request ได้"""
-        @staticmethod
-        def insert_help_request(**kwargs):
-            return insert_help_request(**kwargs)
-
-    help_disp = HelpRequestDispatcher(webhook_url=webhook_url or "", db=_HelpDB())
+    # [FIX] db= was missing → help_requests collection stayed empty forever
+    help_disp = HelpRequestDispatcher(webhook_url=webhook_url or "", db=db_module)
 
     disp=AlertDispatcher(
         cooldowns={"fall":cfg.get("fall",{}).get("cooldown_seconds",alert_cd),
-                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)},
+                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)}, 
         default_cooldown=alert_cd,
         enforce_one_per_file=GEN.get("one_alert_per_file",False),
         snapshot_dir=snapshot_dir,
@@ -186,6 +181,8 @@ def main(src:str, port:int=8081, location:str=""):
 
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
+    hand_miss:   dict[int, int] = {}
+    GRACE_FRAMES = 5
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
@@ -238,8 +235,13 @@ def main(src:str, port:int=8081, location:str=""):
             zones.draw(frame)
 
             rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-            try: hand_d.process_frame(rgb)
-            except Exception: pass
+            # [RTSP FIX] CLAHE preprocessing — applied per-person crop below
+            # (full-frame hand detection removed: MediaPipe can't find small
+            # hands in a 1920×1080 RTSP frame; per-person crop + resize ≥256px
+            # is required — same approach as eval_harness_full.py)
+            lab=cv2.cvtColor(frame,cv2.COLOR_BGR2LAB)
+            lab[:,:,0]=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8)).apply(lab[:,:,0])
+            frame_clahe=cv2.cvtColor(lab,cv2.COLOR_LAB2BGR)
 
             now_time=time.strftime("%Y-%m-%d %H:%M:%S")
             resp=_api("/detect_all",frame)
@@ -279,12 +281,21 @@ def main(src:str, port:int=8081, location:str=""):
                 boxes=None; kpts=None
 
             # [W2] cleanup tracks ที่หายไปจากเฟรม
+            # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ที่เห็นในเฟรมปัจจุบันเฟรม
+            # เดียว) ทำให้ hand_states/fall state ถูกล้างทิ้งทันทีที่ detect พลาดแม้แค่ 1
+            # เฟรม (เช่น motion blur ตอนคนลุกขึ้นเดินเร็วๆ) — ทั้งที่ SimpleTracker เองยัง
+            # ไม่ทันลบ track (มี grace period เก็บ track ไว้จนกว่าจะ lost ติดกัน >5 เฟรม)
+            # ผลคือ progress ของ state machine (เช่น hand_sos state 2 ใกล้จะถึง 3) หายไป
+            # กลางคันบ่อยๆ โดยไม่จำเป็น → เปลี่ยนมาเช็คจาก tracker.tracks แทน เพื่อให้
+            # cleanup ยึด grace period เดียวกับที่ tracker ใช้จริง
             if boxes and boxes.id:
-                active = {int(boxes.id[i].cpu()) for i in range(len(boxes.xyxy))}
-                dropped = set(hand_states.keys()) - active
+                alive = set(tracker.tracks.keys())
+                dropped = set(hand_states.keys()) - alive
                 for tid in dropped:
-                    tracker.cleanup_track(tid)
-                    for d in [hand_states, hand_ev, fall_ev, hand_bc, hand_bf,
+                    fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
+                                                # state could suppress a real fall or
+                                                # fake one if this track_id gets reused
+                    for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
                               hand_bt, fall_bc, fall_bf, fall_bt]:
                         d.pop(tid, None)
 
@@ -324,31 +335,26 @@ def main(src:str, port:int=8081, location:str=""):
                     except Exception: pass
 
                     # ── Hand SOS ─────────────────────────────────────────
-                    # [B2] ใช้ per-track state แทน hand_d._state ซึ่งเป็น global
+                    # [RTSP FIX] per-person crop → MediaPipe hand detection
+                    # (replaces full-frame detection that couldn't find small hands)
                     hs = hand_states.get(tid, 0)
                     hdet = False
                     try:
-                        rh=getattr(hand_d,"_results",None)
-                        if rh and getattr(rh,"hand_landmarks",None):
-                            for hl in rh.hand_landmarks:
-                                xs=[l.x for l in hl];ys=[l.y for l in hl]
-                                area=(max(xs)-min(xs))*w*(max(ys)-min(ys))*h/(w*h)
-                                if area<cfg.get("hand_sos",{}).get("min_hand_bbox_area_norm",0.002): continue
-                                pts=[(int(l.x*w),int(l.y*h)) for l in hl]
-                                hx=sum(p[0] for p in pts)/len(pts)
-                                hy=sum(p[1] for p in pts)/len(pts)
-                                if x1<=hx<=x2 and y1<=hy<=y2:
-                                    hdet=True
-                                    try:
-                                        if hs==0 and hand_d._palm_open(hl): hs=1
-                                        elif hs==1 and hand_d._thumb_in(hl): hs=2
-                                        elif hs==2 and hand_d._fingers_closed(hl): hs=3
-                                    except Exception: pass
-                                    break
+                        hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                        if hand_lms:
+                            hl = hand_lms[0]  # ใช้มือแรกที่ detect ได้
+                            hdet = True
+                            hs = hand_d.check_sos_step(hs, hl)
                     except Exception: pass
-                    if not hdet: hs=max(0,hs-1)
-                    hand_states[tid]=hs  # [B2] เก็บ state per-track
-
+                    if hdet:
+                        hand_miss[tid] = 0
+                    else:
+                        hand_miss[tid] = hand_miss.get(tid, 0) + 1
+                        if hand_miss[tid] >= GRACE_FRAMES:
+                            hs = max(0, hs - 1)
+                            hand_miss[tid] = 0
+                    hand_states[tid]=hs
+                   
                     if hs==3 and not fall_ev.get(tid):
                         if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
                             hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
@@ -362,15 +368,18 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "hand_sos",
-                                        severity      = 2,
-                                        severity_name = "HIGH",
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Gesture",
+                                        zone           = location,
+                                        confidence     = conf,
+                                        timestamp      = datetime.utcnow().isoformat(),
+                                        severity       = "High",
+                                        metadata       = {
+                                            "source_id":  source_id,
+                                            "track_id":   tid,
+                                            "image_path": str(img_path),
+                                            "gesture":    "hand_sos",
+                                        },
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
@@ -413,15 +422,19 @@ def main(src:str, port:int=8081, location:str=""):
                                 # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
-                                        event_uuid    = str(uuid.uuid4()),
-                                        event_type    = "fall",
-                                        severity      = lv,
-                                        severity_name = ln,
-                                        source_id     = source_id,
-                                        location      = location,
-                                        track_id      = tid,
-                                        image_path    = str(img_path),
-                                        extra         = {**ex, "confidence": conf}
+                                        event_uuid     = str(uuid.uuid4()),
+                                        detection_type = "Fall",
+                                        zone           = location,
+                                        confidence     = conf,
+                                        timestamp      = now_time,
+                                        severity       = lv,
+                                        metadata       = {
+                                            **ex,
+                                            "severity_name": ln,
+                                            "source_id":     source_id,
+                                            "track_id":      tid,
+                                            "image_path":    str(img_path),
+                                        }
                                     )
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
@@ -431,6 +444,7 @@ def main(src:str, port:int=8081, location:str=""):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
 
             viz.fps(frame)
+
 
     except KeyboardInterrupt:
         print(f"\n[{source_id[-30:]}] Stopped.")

@@ -6,3 +6,93 @@ cameras:
         y1: 0.0
         x2: 1.0
         y2: 1.0
+        # ไม่ override → ใช้ค่า default จาก thresholds.yaml
+
+  # ───────────────────────────────────────────────────────────────
+  # ตัวอย่าง zone สำหรับมหาวิทยาลัย — ปรับ left_behind / theft ตาม
+  # ลักษณะพื้นที่: ความหนาแน่นคน + มูลค่าของที่มักถูกลืม/ขโมย
+  # ───────────────────────────────────────────────────────────────
+
+  library_reading_room:
+    zones:
+      - name: "study_area"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 60       # นศ.ลุกไปหาหนังสือ/เข้าห้องน้ำนาน
+          theft_window_seconds: 25
+          ownership_confirm_seconds: 2.5
+          proximity_norm: 0.15
+          min_confidence: 0.5
+
+  computer_lab:
+    zones:
+      - name: "lab_area"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 30       # laptop/PC มูลค่าสูง ตรวจให้ไวกว่าห้องสมุด
+          theft_window_seconds: 15
+          ownership_confirm_seconds: 2.0
+          proximity_norm: 0.12
+          min_confidence: 0.5
+
+  hallway_main:
+    zones:
+      - name: "corridor"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 20       # ทางเดินคนพลุกพล่าน ของตกค้างเสี่ยงสูง
+          theft_window_seconds: 12
+          ownership_confirm_seconds: 1.5
+          proximity_norm: 0.18          # คนเดินผ่านเยอะ ผ่อนระยะ "ใกล้" ให้กว้างขึ้นนิด
+          min_confidence: 0.4
+
+  cafeteria:
+    zones:
+      - name: "dining_area"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 90       # ลุกไปต่อคิว/เข้าห้องน้ำ ปกติของโรงอาหาร
+          theft_window_seconds: 20
+          ownership_confirm_seconds: 2.0
+          proximity_norm: 0.15
+          min_confidence: 0.4
+
+  parking_lot:
+    zones:
+      - name: "lot_area"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 600      # รถจอดนานเป็นปกติ ไม่ใช่ "ลืม"
+          theft_window_seconds: 15
+          ownership_confirm_seconds: 3.0
+          proximity_norm: 0.20
+          min_confidence: 0.5
+
+  classroom_generic:
+    zones:
+      - name: "seating_area"
+        x1: 0.0
+        y1: 0.0
+        x2: 1.0
+        y2: 1.0
+        object_guardian:
+          left_behind_seconds: 40       # ระหว่างคาบสั้น ๆ นศ.ลุกออกไปได้
+          theft_window_seconds: 15
+          ownership_confirm_seconds: 2.0
+          proximity_norm: 0.15
+          min_confidence: 0.4

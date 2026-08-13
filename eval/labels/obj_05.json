@@ -1,0 +1,13 @@
+{
+  "video": "obj_05.avi",
+  "location": "ห้องเรียน",
+  "events": [
+    {
+      "event_type": "object_left",
+      "start_sec": 130.0,
+      "end_sec": 159.0,
+      "object_class": "suitcase",
+      "notes": "คนเข้ามาวางกระเป๋าบนโต๊ะ ~t=110-120s แล้วเดินออก ควร trigger object_left หลัง left_behind_seconds"
+    }
+  ]
+}
