@@ -213,12 +213,13 @@ def main(src:str, port:int=8081, location:str=""):
             zones.draw(frame)
 
             rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
-            # CLAHE brightness enhancement for low-light hand detection
+            # [RTSP FIX] CLAHE preprocessing — applied per-person crop below
+            # (full-frame hand detection removed: MediaPipe can't find small
+            # hands in a 1920×1080 RTSP frame; per-person crop + resize ≥256px
+            # is required — same approach as eval_harness_full.py)
             lab=cv2.cvtColor(frame,cv2.COLOR_BGR2LAB)
             lab[:,:,0]=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8)).apply(lab[:,:,0])
-            rgb_enhanced=cv2.cvtColor(lab,cv2.COLOR_LAB2RGB)
-            try: hand_d.process_frame(rgb_enhanced)
-            except Exception: pass
+            frame_clahe=cv2.cvtColor(lab,cv2.COLOR_LAB2BGR)
 
             now_time=time.strftime("%Y-%m-%d %H:%M:%S")
             resp=_api("/detect_all",frame)
@@ -312,27 +313,16 @@ def main(src:str, port:int=8081, location:str=""):
                     except Exception: pass
 
                     # ── Hand SOS ─────────────────────────────────────────
-                    # [B2] ใช้ per-track state แทน hand_d._state ซึ่งเป็น global
+                    # [RTSP FIX] per-person crop → MediaPipe hand detection
+                    # (replaces full-frame detection that couldn't find small hands)
                     hs = hand_states.get(tid, 0)
                     hdet = False
                     try:
-                        rh=getattr(hand_d,"_results",None)
-                        if rh and getattr(rh,"hand_landmarks",None):
-                            for hl in rh.hand_landmarks:
-                                xs=[l.x for l in hl];ys=[l.y for l in hl]
-                                area=(max(xs)-min(xs))*w*(max(ys)-min(ys))*h/(w*h)
-                                if area<cfg.get("hand_sos",{}).get("min_hand_bbox_area_norm",0.002): continue
-                                pts=[(int(l.x*w),int(l.y*h)) for l in hl]
-                                hx=sum(p[0] for p in pts)/len(pts)
-                                hy=sum(p[1] for p in pts)/len(pts)
-                                if x1<=hx<=x2 and y1<=hy<=y2:
-                                    hdet=True
-                                    try:
-                                        if hs==0 and hand_d._palm_open(hl): hs=1
-                                        elif hs==1 and hand_d._thumb_in(hl): hs=2
-                                        elif hs==2 and hand_d._fingers_closed(hl): hs=3
-                                    except Exception: pass
-                                    break
+                        hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                        if hand_lms:
+                            hl = hand_lms[0]  # ใช้มือแรกที่ detect ได้
+                            hdet = True
+                            hs = hand_d.check_sos_step(hs, hl)
                     except Exception: pass
                     if hdet:
                         hand_miss[tid] = 0

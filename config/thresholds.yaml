@@ -57,13 +57,16 @@ general:
   yolo_model: ../models/yolov8n-pose.pt
 hand_sos:
   cooldown_seconds: 60
-  min_detection_confidence: 0.45
+  min_detection_confidence: 0.35
   min_hand_bbox_area_norm: 0.002
   min_kp_conf: 0.4
-  min_tracking_confidence: 0.3
+  min_tracking_confidence: 0.25
   temporal_threshold: 0.4
   temporal_window: 10
-  thumb_in_ratio: 0.85
+  thumb_in_ratio: 0.65
+  fingers_closed_ratio: 1.25
+  fingers_closed_min_count: 3
+
 object_guardian:
   cooldown_seconds: 60
   left_behind_seconds: 15
