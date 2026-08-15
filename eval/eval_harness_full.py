@@ -25,6 +25,8 @@ import argparse
 import csv
 import json
 import time
+from collections import defaultdict, deque
+from math import ceil
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -315,11 +317,19 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
     # Per-track state (same as main.py B2)
     hand_states: dict = {}
     hand_miss: dict = {}
+    hand_first_seen: dict = {}
+    hand_temporal_window = max(1, int(hand_cfg.get("temporal_window", 10)))
+    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.4))))
+    hand_temporal_hits_required = max(1, ceil(hand_temporal_window * hand_temporal_threshold))
+    hand_min_bbox_area_norm = max(0.0, float(hand_cfg.get("min_hand_bbox_area_norm", 0.0)))
+    hand_min_track_age_seconds = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.8)))
+    hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
     fall_states: dict = {}
     GRACE_FRAMES = 5
 
     cooldown_fall = {}
     cooldown_hand = {}
+    hand_last_event_sec = -1e9
     COOLDOWN_SEC = fall_cfg.get("cooldown_seconds", 120)
     HAND_COOLDOWN = hand_cfg.get("cooldown_seconds", 60)
 
@@ -363,6 +373,12 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
 
         # ── Track ──
         assigned = tracker.update([{"bbox": p["bbox"]} for p in people_raw])
+        alive = set(tracker.tracks.keys())
+        dropped = set(hand_states.keys()) - alive
+        for tid in dropped:
+            for d in (hand_states, hand_miss, hand_first_seen, fall_states):
+                d.pop(tid, None)
+            hand_recent_sos.pop(tid, None)
 
         # ── CLAHE for hand detection (same as main.py) ──
         frame_clahe = apply_clahe(frame)
@@ -400,11 +416,19 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
                     del cooldown_fall[tid]
 
             # ── Hand SOS Detection (per-person crop strategy) ──
-            # CRITICAL: MediaPipe cannot detect hands in full RTSP frame (0% rate)
-            # Must crop person bbox, resize to ≥256px, then detect → 91% rate
-            hs = hand_states.get(tid, 0)
+            # [RTSP FIX] ใช้ process_crop() + check_sos_step() ที่ตรงกับ main.py
+            prev_hs = hand_states.get(tid, 0)
+            hs = prev_hs
             hdet = False
             x1, y1, x2, y2 = [int(v) for v in bbox]
+            if tid not in hand_first_seen:
+                hand_first_seen[tid] = t_sec
+            bbox_area_norm = (max(0.0, x2 - x1) * max(0.0, y2 - y1)) / max(1.0, float(w * h))
+            track_age_sec = t_sec - hand_first_seen[tid]
+            hand_eligible = (
+                bbox_area_norm >= hand_min_bbox_area_norm and
+                track_age_sec >= hand_min_track_age_seconds
+            )
 
             # Expand bbox by 10% for hand detection margin
             bw, bh = x2 - x1, y2 - y1
@@ -413,51 +437,36 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             cx2 = min(w, x2 + int(bw * 0.1))
             cy2 = min(h, y2 + int(bh * 0.1))
 
-            crop = frame_clahe[cy1:cy2, cx1:cx2]
-            if crop.size > 0:
-                ch, cw = crop.shape[:2]
-                # Resize crop to at least 256px tall for MediaPipe
-                if ch < 256 and ch > 0:
-                    scale = 256 / ch
-                    crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)))
+            try:
+                if hand_eligible:
+                    hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                    if hand_lms:
+                        hl = hand_lms[0]
+                        hdet = True
+                        hs = hand_d.check_sos_step(hs, hl)
 
-                rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                try:
-                    hand_d.process_frame(rgb_crop)
-                    if hand_d._results and hand_d._results.hand_landmarks:
-                        for hl in hand_d._results.hand_landmarks:
-                            hdet = True
-                            try:
-                                if hs == 0 and hand_d._palm_open(hl):
-                                    hs = 1
-                                elif hs == 1 and hand_d._thumb_in(hl):
-                                    hs = 2
-                                elif hs == 2 and hand_d._fingers_closed(hl):
-                                    hs = 3
-                            except Exception:
-                                pass
-                            # Draw hand landmarks on main frame (map crop coords back)
-                            if save_debug_video:
-                                crop_h, crop_w = crop.shape[:2]
-                                for hi_idx, hl_draw in enumerate(hand_d._results.hand_landmarks):
-                                    pts_frame = [
-                                        (cx1 + int(lm.x * crop_w * (cx2-cx1) / crop_w),
-                                         cy1 + int(lm.y * crop_h * (cy2-cy1) / crop_h))
-                                        for lm in hl_draw
-                                    ]
-                                    HAND_CONNS = [
-                                        (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
-                                        (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
-                                        (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
-                                    ]
-                                    for a, b in HAND_CONNS:
-                                        if a < len(pts_frame) and b < len(pts_frame):
-                                            cv2.line(frame, pts_frame[a], pts_frame[b], (0, 220, 0), 1)
-                                    for pt in pts_frame:
-                                        cv2.circle(frame, pt, 3, (0, 255, 0), -1)
-                            break  # Use first detected hand
-                except Exception:
-                    pass
+                        # Draw hand landmarks on main frame (map crop coords back)
+                        if save_debug_video and hand_d._results and hand_d._results.hand_landmarks:
+                            crop_h = cy2 - cy1
+                            crop_w = cx2 - cx1
+                            for hi_idx, hl_draw in enumerate(hand_d._results.hand_landmarks):
+                                pts_frame = [
+                                    (cx1 + int(lm.x * crop_w),
+                                     cy1 + int(lm.y * crop_h))
+                                    for lm in hl_draw
+                                ]
+                                HAND_CONNS = [
+                                    (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
+                                    (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
+                                    (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
+                                ]
+                                for a, b in HAND_CONNS:
+                                    if a < len(pts_frame) and b < len(pts_frame):
+                                        cv2.line(frame, pts_frame[a], pts_frame[b], (0, 220, 0), 1)
+                                for pt in pts_frame:
+                                    cv2.circle(frame, pt, 3, (0, 255, 0), -1)
+            except Exception:
+                pass
 
             if hdet:
                 hand_miss[tid] = 0
@@ -467,17 +476,29 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
                     hs = max(0, hs - 1)
                     hand_miss[tid] = 0
             hand_states[tid] = hs
+            is_sos_frame = bool(hdet and hs == 3 and hand_eligible)
+            recent_sos = hand_recent_sos[tid]
+            recent_sos.append(is_sos_frame)
+            sos_hits = sum(1 for ok in recent_sos if ok)
+            temporal_confirmed = len(recent_sos) >= hand_temporal_hits_required and sos_hits >= hand_temporal_hits_required
+            fast_sos_confirmed = is_sos_frame and prev_hs >= 1
+            sos_confirmed = temporal_confirmed or fast_sos_confirmed
 
-            if hs == 3 and tid not in cooldown_hand:
-                cooldown_hand[tid] = t_sec
-                predictions.append({
-                    "video": video_path.name,
-                    "event_type": "hand_sos",
-                    "track_id": tid,
-                    "t_sec": round(t_sec, 2),
-                    "confidence": 1.0,
-                    "matched": False,
-                })
+            if sos_confirmed:
+                if t_sec - hand_last_event_sec < HAND_COOLDOWN:
+                    continue
+                last_hand_event = cooldown_hand.get(tid, -1e9)
+                if t_sec - last_hand_event >= HAND_COOLDOWN:
+                    cooldown_hand[tid] = t_sec
+                    hand_last_event_sec = t_sec
+                    predictions.append({
+                        "video": video_path.name,
+                        "event_type": "hand_sos",
+                        "track_id": tid,
+                        "t_sec": round(t_sec, 2),
+                        "confidence": 1.0,
+                        "matched": False,
+                    })
 
             # ── Debug Drawing ──
             if save_debug_video:

@@ -133,11 +133,24 @@ class HandSOSDetector:
 
         return closed_count >= self._fingers_closed_min
 
-    def _thumb_and_fingers_closed(self, lm):
-        """[RTSP FIX] Combined check: thumb tucked + fingers closed ในจังหวะเดียว
-        ใช้สำหรับ allow_fast_sos — เปลี่ยน state 1→3 เมื่อเห็นท่ากำมือชัดเจน
-        (ไม่ต้องรอให้ thumb_in เกิดก่อนแล้วค่อย fingers_closed แยกเฟรม)
+    def _fingers_closed_strict(self, lm):
+        """[RTSP FIX] Strict version: Tier 1 only (distance-based), ≥3 fingers.
+        ใช้สำหรับ fast_sos path (state 1→3) เพื่อกัน false positive จากกล้องมุมสูง
+        ที่ Tier 2 (y-based) fire ผิดกับมือเปิด
         """
+        wrist = lm[0]
+        def _d(a, b):
+            return ((a.x-b.x)**2 + (a.y-b.y)**2) ** 0.5
+        tips = [8, 12, 16, 20]
+        mcps = [5, 9, 13, 17]
+        closed_count = sum(
+            1 for t, m in zip(tips, mcps)
+            if _d(lm[t], wrist) < _d(lm[m], wrist) * self._fingers_closed_ratio
+        )
+        return closed_count >= 3  # ต้อง 3 ใน 4 นิ้ว (strict)
+
+    def _thumb_and_fingers_closed(self, lm):
+        """[RTSP FIX] Combined check: thumb tucked + fingers closed ในจังหวะเดียว"""
         return self._thumb_in(lm) and self._fingers_closed(lm)
 
     def check_sos_step(self, cur_state, lm):
@@ -160,8 +173,13 @@ class HandSOSDetector:
             return 0
 
         if cur_state == 1:
-            # [RTSP FIX] allow_fast_sos: ถ้า thumb+fingers closed พร้อมกัน → ข้ามไป 3
-            if self._allow_fast_sos and self._thumb_and_fingers_closed(lm):
+            # [RTSP FIX] allow_fast_sos: จาก RTSP ระยะไกล _thumb_in() แทบไม่เคย pass
+            # → ใช้ _fingers_closed_strict() (Tier 1 only, ≥3 นิ้ว) + เช็คว่า
+            # palm ไม่ open แล้ว (มือเปลี่ยนจากเปิดเป็นปิดจริงๆ)
+            if self._allow_fast_sos:
+                if self._fingers_closed_strict(lm) and not self._palm_open(lm):
+                    return 3
+            if self._thumb_and_fingers_closed(lm):
                 return 3
             if self._thumb_in(lm):
                 return 2
