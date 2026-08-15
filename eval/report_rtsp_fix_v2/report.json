@@ -1,0 +1,52 @@
+{
+  "tolerance_sec": 5.0,
+  "total_video_hours": 0.011,
+  "false_alarms_per_hour": 90.91,
+  "metrics": {
+    "hand_sos": {
+      "tp": 2,
+      "fp": 1,
+      "fn": 1,
+      "precision": 0.6667,
+      "recall": 0.6667,
+      "f1": 0.6667
+    }
+  },
+  "config": {
+    "fall": {
+      "bbox_ratio_thresh": 1.3,
+      "confirm_seconds": 4.0,
+      "cooldown_seconds": 120,
+      "critical_seconds": 30.0,
+      "danger_lying_seconds": 15.0,
+      "danger_max_seconds": 120.0,
+      "danger_min_seconds": 3.0,
+      "geometry_angle_thresh": 25.0,
+      "geometry_confirm_seconds": 3.0,
+      "geometry_ratio_thresh": 1.8,
+      "history_len": 16,
+      "lying_angle_thresh": 40.0,
+      "motion_thresh_norm": 0.02,
+      "recover_seconds": 5.0,
+      "spike_thresh_norm": 0.18,
+      "spine_angle_thresh": 55.0,
+      "sustain_seconds": 1.0,
+      "temporal_threshold": 0.4,
+      "temporal_window": 10,
+      "warning_seconds": 2.0
+    },
+    "hand_sos": {
+      "cooldown_seconds": 60,
+      "min_detection_confidence": 0.3,
+      "min_hand_bbox_area_norm": 0.002,
+      "min_kp_conf": 0.4,
+      "min_tracking_confidence": 0.25,
+      "temporal_threshold": 0.4,
+      "temporal_window": 10,
+      "thumb_in_ratio": 0.7,
+      "fingers_closed_ratio": 1.4,
+      "fingers_closed_min_count": 2,
+      "allow_fast_sos": true
+    }
+  }
+}
