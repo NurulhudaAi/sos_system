@@ -68,6 +68,10 @@ hand_sos:
   fingers_closed_min_count: 2
   allow_fast_sos: true
   min_track_age_seconds: 0.4
+  # [FIX-FP] temporal persistence ลด false positive
+  fingers_closed_strict_ratio: 1.20
+  fast_sos_min_hand_span: 0.04
+  min_consec_sos_frames: 3
 
 object_guardian:
   cooldown_seconds: 60
