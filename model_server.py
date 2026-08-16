@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 from ultralytics import YOLO
+import socket
 
 app = FastAPI()
 ROOT = Path(__file__).resolve().parent
@@ -388,5 +389,5 @@ async def list_hand_snapshots(limit: int = 10):
     return {"snapshots": snapshots, "total": len(snapshots)}
 
 if __name__=='__main__':
-    print('[model-server] starting uvicorn on 127.0.0.1:8000')
-    uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')
+    # Let OS choose an available port (port=0)
+    uvicorn.run(app, host='127.0.0.1', port=0, log_level='info')
