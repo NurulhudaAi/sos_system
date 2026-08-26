@@ -73,6 +73,12 @@ hand_sos:
   fast_sos_min_hand_span: 0.04
   min_consec_sos_frames: 3
 
+hands_over_head:
+  min_kp_conf: 0.3
+  confirm_seconds: 5.0
+  cooldown_seconds: 60
+  margin_above_nose: 0.03
+
 object_guardian:
   cooldown_seconds: 60
   left_behind_seconds: 15
