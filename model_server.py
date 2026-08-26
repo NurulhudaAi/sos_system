@@ -47,7 +47,7 @@ PERSON_CONF = GENERAL.get('person_conf', 0.30)
 # [FIX] Separate general-object detection model config
 # Default is the bare model name (not a relative path) so Ultralytics
 # can auto-download+cache it if it's not present locally yet.
-OBJECT_MODEL = GENERAL.get('object_model', 'yolov8n.pt')
+OBJECT_MODEL = GENERAL.get('object_model', '../models/yolov8n.pt')
 OBJECT_CONF  = GENERAL.get(
     'object_conf',
     cfg.get('object_guardian', {}).get('min_confidence', 0.4)
@@ -389,5 +389,5 @@ async def list_hand_snapshots(limit: int = 10):
     return {"snapshots": snapshots, "total": len(snapshots)}
 
 if __name__=='__main__':
-    # Let OS choose an available port (port=0)
-    uvicorn.run(app, host='127.0.0.1', port=0, log_level='info')
+    # const port at 8000
+    uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')
