@@ -39,6 +39,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from detectors.fall_detector import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
+from detectors.hands_over_head_detector import HandsOverHeadDetector
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -296,10 +297,11 @@ def draw_hud(frame, fps, frame_idx, t_sec, hand_states, fall_states, predictions
 
 def evaluate_video(video_path: Path, label: dict, detector_url: str,
                    fall_cfg: dict, hand_cfg: dict,
+                   head_cfg: dict = None,
                    sample_fps: int = 5,
                    save_debug_video: bool = False,
                    debug_video_dir: Path = None) -> Tuple[List[dict], float]:
-    """Process one video, run fall + hand_sos detection with debug viz."""
+    """Process one video, run fall + hand_sos + pose_sos detection with debug viz."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"⚠️  cannot open {video_path}")
@@ -312,6 +314,7 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
 
     fall_d = FallDetector(fall_cfg)
     hand_d = HandSOSDetector(hand_cfg)
+    head_d = HandsOverHeadDetector(head_cfg or {})
     tracker = SimpleTracker()
 
     # Per-track state (same as main.py B2)
@@ -326,12 +329,16 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
     hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
     fall_states: dict = {}
     GRACE_FRAMES = 5
+    min_consec_sos = max(1, int(hand_cfg.get("min_consec_sos_frames", 3)))
+    hand_consec_count: dict = {}  # per-track consecutive SOS frame count
 
     cooldown_fall = {}
     cooldown_hand = {}
+    cooldown_pose = {}
     hand_last_event_sec = -1e9
     COOLDOWN_SEC = fall_cfg.get("cooldown_seconds", 120)
     HAND_COOLDOWN = hand_cfg.get("cooldown_seconds", 60)
+    POSE_COOLDOWN = (head_cfg or {}).get("cooldown_seconds", 60)
 
     # Debug video writer
     debug_writer = None
@@ -390,10 +397,10 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             kps = people_raw[i].get("keypoints", []) if i < len(people_raw) else []
             conf = people_raw[i].get("conf", 0.0) if i < len(people_raw) else 0.0
 
-            # ── Fall Detection ──
+            # ── Fall Detection (pass video timestamp) ──
             fr = None
             try:
-                fr = fall_d.process(tid, kps, bbox, h, w)
+                fr = fall_d.process(tid, kps, bbox, h, w, timestamp=t_sec)
                 fall_states[tid] = fr
             except Exception as e:
                 fr = {}
@@ -414,6 +421,24 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             elif not is_confirmed and tid in cooldown_fall:
                 if t_sec - cooldown_fall[tid] > COOLDOWN_SEC:
                     del cooldown_fall[tid]
+
+            # ── Pose SOS Detection (hands over head) ──
+            try:
+                pose_r = head_d.process(tid, kps, h, w, timestamp=t_sec)
+                if pose_r.get("triggered"):
+                    last_pose = cooldown_pose.get(tid, -1e9)
+                    if t_sec - last_pose >= POSE_COOLDOWN:
+                        cooldown_pose[tid] = t_sec
+                        predictions.append({
+                            "video": video_path.name,
+                            "event_type": "pose_sos",
+                            "track_id": tid,
+                            "t_sec": round(t_sec, 2),
+                            "confidence": 1.0,
+                            "matched": False,
+                        })
+            except Exception:
+                pose_r = {}
 
             # ── Hand SOS Detection (per-person crop strategy) ──
             # [RTSP FIX] ใช้ process_crop() + check_sos_step() ที่ตรงกับ main.py
@@ -484,7 +509,15 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             fast_sos_confirmed = is_sos_frame and prev_hs >= 1
             sos_confirmed = temporal_confirmed or fast_sos_confirmed
 
-            if sos_confirmed:
+            # [FIX-FP] Consecutive SOS frames gate — require N consecutive
+            # frames with state=3 before confirming (reduces single-frame FP)
+            if is_sos_frame:
+                hand_consec_count[tid] = hand_consec_count.get(tid, 0) + 1
+            else:
+                hand_consec_count[tid] = 0
+            consec_ok = hand_consec_count.get(tid, 0) >= min_consec_sos
+
+            if sos_confirmed and consec_ok:
                 if t_sec - hand_last_event_sec < HAND_COOLDOWN:
                     continue
                 last_hand_event = cooldown_hand.get(tid, -1e9)
@@ -597,6 +630,7 @@ def main():
         thresholds = {}
     fall_cfg = thresholds.get("fall", {})
     hand_cfg = thresholds.get("hand_sos", {})
+    head_cfg = thresholds.get("hands_over_head", {})
 
     # Collect label files (exclude object labels and multicam)
     label_files = sorted(
@@ -639,7 +673,7 @@ def main():
         print(f"▶ {label['video']} (location: {label.get('location', '?')}) ...")
         preds, vid_secs = evaluate_video(
             video_path, label, args.detector_url,
-            fall_cfg, hand_cfg,
+            fall_cfg, hand_cfg, head_cfg,
             sample_fps=args.sample_fps,
             save_debug_video=args.save_debug_video,
             debug_video_dir=debug_video_dir,
