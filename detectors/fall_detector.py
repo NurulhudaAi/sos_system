@@ -150,15 +150,18 @@ class FallDetector:
     # Main processing entry point
     # ------------------------------------------------------------------
 
-    def process(self, tid: int, kps, bbox, h: int, w: int) -> dict:
+    def process(self, tid: int, kps, bbox, h: int, w: int, timestamp: float = None) -> dict:
         """Process one detection for track `tid` and return a result dict.
 
         Parameters
         ----------
-        tid  : track ID (int)
-        kps  : keypoints array, shape (N, 3) — [x, y, confidence]
-        bbox : [x1, y1, x2, y2] in pixels
-        h, w : frame height and width in pixels
+        tid       : track ID (int)
+        kps       : keypoints array, shape (N, 3) — [x, y, confidence]
+        bbox      : [x1, y1, x2, y2] in pixels
+        h, w      : frame height and width in pixels
+        timestamp : video time in seconds (optional). If None, uses time.time().
+                    Pass video timestamp when processing pre-recorded video to
+                    avoid wall-clock timing issues at faster-than-realtime speed.
         """
         x1, y1, x2, y2 = bbox
         ratio = (x2 - x1) / ((y2 - y1) + 1e-6)
@@ -174,7 +177,7 @@ class FallDetector:
             d  = sh - hp
             angle = abs(np.degrees(np.arctan2(abs(d[1]), abs(d[0]) + 1e-6)))
 
-        now = time.time()
+        now = timestamp if timestamp is not None else time.time()
         cx  = (x1 + x2) / 2.0
         cy  = (y1 + y2) / 2.0
         h_pixels = float(h) if h else 1.0
@@ -188,8 +191,19 @@ class FallDetector:
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 1 — Geometry signals
+        #
+        # FIX 5: Sitting suppression — if torso is upright (angle > 70°)
+        # but bbox ratio is wide, the person is likely sitting, not fallen.
+        # Original: `ratio > thresh OR angle < thresh` → triggers on
+        # sitting with wide bbox. Now: suppress is_down_basic when spine
+        # is clearly upright (> 70°), even if bbox ratio is wide.
         # ════════════════════════════════════════════════════════════════
-        is_down_basic = ratio > self.bbox_thresh or angle < self.angle_thresh
+        sitting_upright = has_pose and angle > 70.0
+        if sitting_upright:
+            # Only geometry angle can trigger — bbox ratio alone is not enough
+            is_down_basic = angle < self.angle_thresh
+        else:
+            is_down_basic = ratio > self.bbox_thresh or angle < self.angle_thresh
 
         # Strong geometry: very wide bbox AND very flat torso simultaneously.
         # Used as a keypoint-free fallback (confirm_seconds shortcut).
