@@ -26,7 +26,7 @@ danger:
   immobile_seconds: 5
   record_threshold_level: 2
 fall:
-  bbox_ratio_thresh: 1.3
+  bbox_ratio_thresh: 0.9
   confirm_seconds: 4.0
   cooldown_seconds: 120
   critical_seconds: 30.0
@@ -41,7 +41,9 @@ fall:
   motion_thresh_norm: 0.02
   recover_seconds: 5.0
   spike_thresh_norm: 0.18
-  spine_angle_thresh: 55.0
+  min_model_conf: 0.25
+  model_confirm_seconds: 3.0
+  spine_angle_thresh: 65.0
   sustain_seconds: 1.0
   temporal_threshold: 0.4
   temporal_window: 10
@@ -53,8 +55,13 @@ fall_warning:
 general:
   detector_url: http://127.0.0.1:8000
   frame_skip: 1
-  person_conf: 0.3
-  yolo_model: ../models/yolov8n-pose.pt
+  person_conf: 0.20
+  fall_pose_conf: 0.20
+  yolo_model: "../models/yolov8n.pt"
+  fall_pose_model: "../models/FallGuard_YOLOv8Pose.pt" 
+  fall_pose_class_map:
+    0: laying
+    1: standing
 hand_sos:
   cooldown_seconds: 60
   min_detection_confidence: 0.30

@@ -25,6 +25,37 @@ Config (config/thresholds.yaml -> general:):
 
 If the object model file is missing, object detection is disabled with
 a warning (fall/hand_sos pipeline keeps working — no hard crash).
+
+[FIX — optional custom laying/standing pose model]
+Root cause of "fall sometimes not detected on RTSP": the generic
+COCO-pretrained yolov8n-pose.pt is trained overwhelmingly on standing /
+walking people. Its person-detection confidence (and keypoint
+confidence) commonly degrades — sometimes below `person_conf` entirely —
+for someone lying flat, prone, or partially occluded. When that
+happens, `_detect_people` returns NO bbox for that person at all, so
+FallDetector.process() never even runs for them that frame, regardless
+of how good its geometry/motion logic is downstream.
+
+Fix: support an OPTIONAL second pose model fine-tuned specifically on
+laying/standing posture (see the FallGuard notebook — trains
+yolov8n-pose.pt further with a 2-class laying/standing head, still
+17 keypoints). When configured and loadable, this model is used as the
+PRIMARY person detector (better recall for lying poses, still gives
+keypoints for FallDetector's geometry math) and its class output is
+passed through as `posture_class` / `posture_conf` per person so
+FallDetector can use it as a direct, geometry-independent "this is a
+laying person" signal.
+
+Config (config/thresholds.yaml -> general:):
+    fall_pose_model: "../models/fallguard_yolov8pose.pt"   # optional
+    fall_pose_class_map:                                    # optional override
+      0: laying
+      1: standing
+
+If `fall_pose_model` is not set or the file can't be loaded, everything
+falls back exactly to the previous behavior (generic pose model only,
+no posture_class/posture_conf in the response) — fully backward
+compatible.
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
@@ -52,6 +83,13 @@ OBJECT_CONF  = GENERAL.get(
     'object_conf',
     cfg.get('object_guardian', {}).get('min_confidence', 0.4)
 )
+
+# [NEW] Optional custom laying/standing pose model config
+FALL_POSE_MODEL = GENERAL.get('fall_pose_model')  # None = disabled, use generic pose model only
+FALL_POSE_CONF  = GENERAL.get('fall_pose_conf', PERSON_CONF)
+FALL_POSE_CLASS_MAP = GENERAL.get('fall_pose_class_map', {0: 'laying', 1: 'standing'})
+# normalize keys to int (yaml may load them as int already, but be safe)
+FALL_POSE_CLASS_MAP = {int(k): v for k, v in FALL_POSE_CLASS_MAP.items()}
 
 # [CLAHE] Contrast Limited Adaptive Histogram Equalization
 # Improves detection accuracy in low-contrast / variable-lighting conditions.
@@ -85,12 +123,31 @@ except Exception as e:
           f"Object Guardian will see zero objects until '{OBJECT_MODEL}' "
           f"is available. Fall/hand_sos detection is unaffected.")
 
+# [NEW] load optional custom laying/standing pose model once.
+# When present, this REPLACES the generic pose model as the primary
+# person detector (better recall on lying/prone poses), while still
+# providing 17-keypoint output for FallDetector's geometry math.
+yolo_fall_pose = None
+if FALL_POSE_MODEL:
+    try:
+        print(f"[model-server] Loading custom fall-pose model: {FALL_POSE_MODEL}")
+        yolo_fall_pose = YOLO(FALL_POSE_MODEL)
+        print(f"[model-server] Custom fall-pose model loaded "
+              f"(classes={yolo_fall_pose.names})")
+    except Exception as e:
+        yolo_fall_pose = None
+        print(f"⚠️  [model-server] Custom fall-pose model NOT loaded ({e}) — "
+              f"falling back to generic pose model only. Set "
+              f"general.fall_pose_model in thresholds.yaml once your "
+              f"trained weights (e.g. FallGuard_YOLOv8Pose.pt) are in place.")
+
 @app.get('/health')
 def health():
     return {
         "status": "ok",
         "device": DEVICE,
         "object_model_loaded": yolo_obj is not None,
+        "fall_pose_model_loaded": yolo_fall_pose is not None,
         "clahe_enabled": CLAHE_ENABLED,
     }
 
@@ -192,15 +249,14 @@ def _apply_clahe(frame):
         return frame
 
 
-def _detect_people(frame, h, w):
-    """Pose-model people detection with keypoints (unchanged logic)."""
-    people = []
-    try:
-        results = yolo(frame, conf=PERSON_CONF, classes=[0])
-    except Exception as e:
-        print('[model-server] pose inference error', e)
-        return people
+def _extract_pose_dets(results, h, w, with_posture=False):
+    """Shared parsing for a pose-model result set → list of person dicts.
 
+    When with_posture=True, also reads results[0].boxes.cls (the
+    laying/standing class head of the custom fall-pose model) and
+    attaches posture_class/posture_conf per detection.
+    """
+    people = []
     if not results or results[0].boxes is None:
         return people
 
@@ -222,6 +278,16 @@ def _detect_people(frame, h, w):
             confs = list(boxes.conf)
         except Exception:
             confs = []
+
+    classes = None
+    if with_posture:
+        try:
+            classes = boxes.cls.cpu().numpy().astype(int).tolist()
+        except Exception:
+            try:
+                classes = [int(c) for c in boxes.cls]
+            except Exception:
+                classes = None
 
     kpts_all = []
     if kpts is not None and getattr(kpts, 'data', None) is not None:
@@ -253,9 +319,67 @@ def _detect_people(frame, h, w):
         x1, y1, x2, y2 = [float(v) for v in box]
         conf = float(confs[i_box]) if i_box < len(confs) else 0.0
         kp = kpts_all[i_box] if i_box < len(kpts_all) else []
-        people.append({'bbox': [x1, y1, x2, y2], 'conf': conf, 'keypoints': kp})
+        person = {'bbox': [x1, y1, x2, y2], 'conf': conf, 'keypoints': kp}
+        if with_posture and classes is not None and i_box < len(classes):
+            cls_id = classes[i_box]
+            person['posture_class'] = FALL_POSE_CLASS_MAP.get(cls_id, str(cls_id))
+            person['posture_conf'] = conf
+        people.append(person)
 
     return people
+
+
+def _detect_people(frame, h, w):
+    """People detection with keypoints.
+
+    [FIX] Uses the generic COCO pose model as the PRIMARY person detector
+    (best recall for all poses/distances), then OVERLAYS posture_class/
+    posture_conf from the optional custom fall-pose model by IoU matching.
+
+    Previously the custom model REPLACED the generic model, but it has
+    much lower recall (92% miss rate on rtsp1.mp4) — it was trained on a
+    small laying/standing dataset and doesn't generalize to all camera
+    angles/distances.  The generic model detects people reliably; the
+    custom model adds posture classification on top.
+    """
+    # Step 1: Generic YOLO for person bboxes + keypoints (primary)
+    try:
+        results = yolo(frame, conf=PERSON_CONF, classes=[0])
+    except Exception as e:
+        print('[model-server] pose inference error', e)
+        return []
+
+    people = _extract_pose_dets(results, h, w, with_posture=False)
+
+    # Step 2: If FallGuard model is available, run it and overlay posture
+    if yolo_fall_pose is not None and people:
+        try:
+            fp_results = yolo_fall_pose(frame, conf=FALL_POSE_CONF)
+            fp_dets = _extract_pose_dets(fp_results, h, w, with_posture=True)
+
+            # Match FallGuard detections to generic detections by IoU
+            for person in people:
+                best_iou, best_fp = 0.0, None
+                px1, py1, px2, py2 = person['bbox']
+                for fp in fp_dets:
+                    fx1, fy1, fx2, fy2 = fp['bbox']
+                    ix1 = max(px1, fx1); iy1 = max(py1, fy1)
+                    ix2 = min(px2, fx2); iy2 = min(py2, fy2)
+                    iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
+                    inter = iw * ih
+                    area_p = max(1e-6, (px2-px1)*(py2-py1))
+                    area_f = max(1e-6, (fx2-fx1)*(fy2-fy1))
+                    iou = inter / (area_p + area_f - inter) if (area_p + area_f - inter) > 0 else 0
+                    if iou > best_iou:
+                        best_iou, best_fp = iou, fp
+                if best_fp is not None and best_iou >= 0.3:
+                    person['posture_class'] = best_fp.get('posture_class')
+                    person['posture_conf'] = best_fp.get('posture_conf', 0.0)
+        except Exception as e:
+            print('[model-server] fall-pose overlay error (continuing without posture):', e)
+
+    return people
+
 
 
 def _detect_objects(frame):
@@ -314,9 +438,9 @@ def _detect_objects(frame):
 
 @app.post('/detect_all')
 async def detect_all(image: UploadFile = File(...)):
-    """Detect people (pose model, w/ keypoints) and objects (general
-    COCO model) — returns both. See module docstring for the fix
-    rationale (previously `objects` was always empty)."""
+    """Detect people (pose model, w/ keypoints, + optional posture_class
+    from the custom fall-pose model) and objects (general COCO model) —
+    returns both. See module docstring for the fix rationale."""
     data = await image.read()
     arr = np.frombuffer(data, np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -389,5 +513,5 @@ async def list_hand_snapshots(limit: int = 10):
     return {"snapshots": snapshots, "total": len(snapshots)}
 
 if __name__=='__main__':
-    # const port at 8000
+    # port8000
     uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')
