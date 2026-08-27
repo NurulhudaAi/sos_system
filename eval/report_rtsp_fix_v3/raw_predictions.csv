@@ -1,0 +1,5 @@
+video,event_type,track_id,t_sec,confidence,matched
+rtsp_hand1.mp4,hand_sos,0,0.6,1.0,True
+rtsp_hand2.mp4,hand_sos,0,12.2,1.0,True
+rtsp_hand3.mp4,hand_sos,0,0.4,1.0,True
+rtsp_hand3.mp4,hand_sos,1,3.0,1.0,False

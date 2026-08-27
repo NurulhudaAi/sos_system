@@ -25,6 +25,8 @@ import argparse
 import csv
 import json
 import time
+from collections import defaultdict, deque
+from math import ceil
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -37,6 +39,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from detectors.fall_detector import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
+from detectors.hands_over_head_detector import HandsOverHeadDetector
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -294,10 +297,11 @@ def draw_hud(frame, fps, frame_idx, t_sec, hand_states, fall_states, predictions
 
 def evaluate_video(video_path: Path, label: dict, detector_url: str,
                    fall_cfg: dict, hand_cfg: dict,
+                   head_cfg: dict = None,
                    sample_fps: int = 5,
                    save_debug_video: bool = False,
                    debug_video_dir: Path = None) -> Tuple[List[dict], float]:
-    """Process one video, run fall + hand_sos detection with debug viz."""
+    """Process one video, run fall + hand_sos + pose_sos detection with debug viz."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"⚠️  cannot open {video_path}")
@@ -310,18 +314,31 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
 
     fall_d = FallDetector(fall_cfg)
     hand_d = HandSOSDetector(hand_cfg)
+    head_d = HandsOverHeadDetector(head_cfg or {})
     tracker = SimpleTracker()
 
     # Per-track state (same as main.py B2)
     hand_states: dict = {}
     hand_miss: dict = {}
+    hand_first_seen: dict = {}
+    hand_temporal_window = max(1, int(hand_cfg.get("temporal_window", 10)))
+    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.4))))
+    hand_temporal_hits_required = max(1, ceil(hand_temporal_window * hand_temporal_threshold))
+    hand_min_bbox_area_norm = max(0.0, float(hand_cfg.get("min_hand_bbox_area_norm", 0.0)))
+    hand_min_track_age_seconds = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.8)))
+    hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
     fall_states: dict = {}
     GRACE_FRAMES = 5
+    min_consec_sos = max(1, int(hand_cfg.get("min_consec_sos_frames", 3)))
+    hand_consec_count: dict = {}  # per-track consecutive SOS frame count
 
     cooldown_fall = {}
     cooldown_hand = {}
+    cooldown_pose = {}
+    hand_last_event_sec = -1e9
     COOLDOWN_SEC = fall_cfg.get("cooldown_seconds", 120)
     HAND_COOLDOWN = hand_cfg.get("cooldown_seconds", 60)
+    POSE_COOLDOWN = (head_cfg or {}).get("cooldown_seconds", 60)
 
     # Debug video writer
     debug_writer = None
@@ -363,6 +380,12 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
 
         # ── Track ──
         assigned = tracker.update([{"bbox": p["bbox"]} for p in people_raw])
+        alive = set(tracker.tracks.keys())
+        dropped = set(hand_states.keys()) - alive
+        for tid in dropped:
+            for d in (hand_states, hand_miss, hand_first_seen, fall_states):
+                d.pop(tid, None)
+            hand_recent_sos.pop(tid, None)
 
         # ── CLAHE for hand detection (same as main.py) ──
         frame_clahe = apply_clahe(frame)
@@ -374,10 +397,10 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             kps = people_raw[i].get("keypoints", []) if i < len(people_raw) else []
             conf = people_raw[i].get("conf", 0.0) if i < len(people_raw) else 0.0
 
-            # ── Fall Detection ──
+            # ── Fall Detection (pass video timestamp) ──
             fr = None
             try:
-                fr = fall_d.process(tid, kps, bbox, h, w)
+                fr = fall_d.process(tid, kps, bbox, h, w, timestamp=t_sec)
                 fall_states[tid] = fr
             except Exception as e:
                 fr = {}
@@ -399,12 +422,38 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
                 if t_sec - cooldown_fall[tid] > COOLDOWN_SEC:
                     del cooldown_fall[tid]
 
+            # ── Pose SOS Detection (hands over head) ──
+            try:
+                pose_r = head_d.process(tid, kps, h, w, timestamp=t_sec)
+                if pose_r.get("triggered"):
+                    last_pose = cooldown_pose.get(tid, -1e9)
+                    if t_sec - last_pose >= POSE_COOLDOWN:
+                        cooldown_pose[tid] = t_sec
+                        predictions.append({
+                            "video": video_path.name,
+                            "event_type": "pose_sos",
+                            "track_id": tid,
+                            "t_sec": round(t_sec, 2),
+                            "confidence": 1.0,
+                            "matched": False,
+                        })
+            except Exception:
+                pose_r = {}
+
             # ── Hand SOS Detection (per-person crop strategy) ──
-            # CRITICAL: MediaPipe cannot detect hands in full RTSP frame (0% rate)
-            # Must crop person bbox, resize to ≥256px, then detect → 91% rate
-            hs = hand_states.get(tid, 0)
+            # [RTSP FIX] ใช้ process_crop() + check_sos_step() ที่ตรงกับ main.py
+            prev_hs = hand_states.get(tid, 0)
+            hs = prev_hs
             hdet = False
             x1, y1, x2, y2 = [int(v) for v in bbox]
+            if tid not in hand_first_seen:
+                hand_first_seen[tid] = t_sec
+            bbox_area_norm = (max(0.0, x2 - x1) * max(0.0, y2 - y1)) / max(1.0, float(w * h))
+            track_age_sec = t_sec - hand_first_seen[tid]
+            hand_eligible = (
+                bbox_area_norm >= hand_min_bbox_area_norm and
+                track_age_sec >= hand_min_track_age_seconds
+            )
 
             # Expand bbox by 10% for hand detection margin
             bw, bh = x2 - x1, y2 - y1
@@ -413,51 +462,36 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
             cx2 = min(w, x2 + int(bw * 0.1))
             cy2 = min(h, y2 + int(bh * 0.1))
 
-            crop = frame_clahe[cy1:cy2, cx1:cx2]
-            if crop.size > 0:
-                ch, cw = crop.shape[:2]
-                # Resize crop to at least 256px tall for MediaPipe
-                if ch < 256 and ch > 0:
-                    scale = 256 / ch
-                    crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)))
+            try:
+                if hand_eligible:
+                    hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                    if hand_lms:
+                        hl = hand_lms[0]
+                        hdet = True
+                        hs = hand_d.check_sos_step(hs, hl)
 
-                rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-                try:
-                    hand_d.process_frame(rgb_crop)
-                    if hand_d._results and hand_d._results.hand_landmarks:
-                        for hl in hand_d._results.hand_landmarks:
-                            hdet = True
-                            try:
-                                if hs == 0 and hand_d._palm_open(hl):
-                                    hs = 1
-                                elif hs == 1 and hand_d._thumb_in(hl):
-                                    hs = 2
-                                elif hs == 2 and hand_d._fingers_closed(hl):
-                                    hs = 3
-                            except Exception:
-                                pass
-                            # Draw hand landmarks on main frame (map crop coords back)
-                            if save_debug_video:
-                                crop_h, crop_w = crop.shape[:2]
-                                for hi_idx, hl_draw in enumerate(hand_d._results.hand_landmarks):
-                                    pts_frame = [
-                                        (cx1 + int(lm.x * crop_w * (cx2-cx1) / crop_w),
-                                         cy1 + int(lm.y * crop_h * (cy2-cy1) / crop_h))
-                                        for lm in hl_draw
-                                    ]
-                                    HAND_CONNS = [
-                                        (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
-                                        (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
-                                        (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
-                                    ]
-                                    for a, b in HAND_CONNS:
-                                        if a < len(pts_frame) and b < len(pts_frame):
-                                            cv2.line(frame, pts_frame[a], pts_frame[b], (0, 220, 0), 1)
-                                    for pt in pts_frame:
-                                        cv2.circle(frame, pt, 3, (0, 255, 0), -1)
-                            break  # Use first detected hand
-                except Exception:
-                    pass
+                        # Draw hand landmarks on main frame (map crop coords back)
+                        if save_debug_video and hand_d._results and hand_d._results.hand_landmarks:
+                            crop_h = cy2 - cy1
+                            crop_w = cx2 - cx1
+                            for hi_idx, hl_draw in enumerate(hand_d._results.hand_landmarks):
+                                pts_frame = [
+                                    (cx1 + int(lm.x * crop_w),
+                                     cy1 + int(lm.y * crop_h))
+                                    for lm in hl_draw
+                                ]
+                                HAND_CONNS = [
+                                    (0,1),(1,2),(2,3),(3,4),(0,5),(5,6),(6,7),(7,8),
+                                    (0,9),(9,10),(10,11),(11,12),(0,13),(13,14),(14,15),(15,16),
+                                    (0,17),(17,18),(18,19),(19,20),(5,9),(9,13),(13,17),
+                                ]
+                                for a, b in HAND_CONNS:
+                                    if a < len(pts_frame) and b < len(pts_frame):
+                                        cv2.line(frame, pts_frame[a], pts_frame[b], (0, 220, 0), 1)
+                                for pt in pts_frame:
+                                    cv2.circle(frame, pt, 3, (0, 255, 0), -1)
+            except Exception:
+                pass
 
             if hdet:
                 hand_miss[tid] = 0
@@ -467,17 +501,37 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
                     hs = max(0, hs - 1)
                     hand_miss[tid] = 0
             hand_states[tid] = hs
+            is_sos_frame = bool(hdet and hs == 3 and hand_eligible)
+            recent_sos = hand_recent_sos[tid]
+            recent_sos.append(is_sos_frame)
+            sos_hits = sum(1 for ok in recent_sos if ok)
+            temporal_confirmed = len(recent_sos) >= hand_temporal_hits_required and sos_hits >= hand_temporal_hits_required
+            fast_sos_confirmed = is_sos_frame and prev_hs >= 1
+            sos_confirmed = temporal_confirmed or fast_sos_confirmed
 
-            if hs == 3 and tid not in cooldown_hand:
-                cooldown_hand[tid] = t_sec
-                predictions.append({
-                    "video": video_path.name,
-                    "event_type": "hand_sos",
-                    "track_id": tid,
-                    "t_sec": round(t_sec, 2),
-                    "confidence": 1.0,
-                    "matched": False,
-                })
+            # [FIX-FP] Consecutive SOS frames gate — require N consecutive
+            # frames with state=3 before confirming (reduces single-frame FP)
+            if is_sos_frame:
+                hand_consec_count[tid] = hand_consec_count.get(tid, 0) + 1
+            else:
+                hand_consec_count[tid] = 0
+            consec_ok = hand_consec_count.get(tid, 0) >= min_consec_sos
+
+            if sos_confirmed and consec_ok:
+                if t_sec - hand_last_event_sec < HAND_COOLDOWN:
+                    continue
+                last_hand_event = cooldown_hand.get(tid, -1e9)
+                if t_sec - last_hand_event >= HAND_COOLDOWN:
+                    cooldown_hand[tid] = t_sec
+                    hand_last_event_sec = t_sec
+                    predictions.append({
+                        "video": video_path.name,
+                        "event_type": "hand_sos",
+                        "track_id": tid,
+                        "t_sec": round(t_sec, 2),
+                        "confidence": 1.0,
+                        "matched": False,
+                    })
 
             # ── Debug Drawing ──
             if save_debug_video:
@@ -576,6 +630,7 @@ def main():
         thresholds = {}
     fall_cfg = thresholds.get("fall", {})
     hand_cfg = thresholds.get("hand_sos", {})
+    head_cfg = thresholds.get("hands_over_head", {})
 
     # Collect label files (exclude object labels and multicam)
     label_files = sorted(
@@ -618,7 +673,7 @@ def main():
         print(f"▶ {label['video']} (location: {label.get('location', '?')}) ...")
         preds, vid_secs = evaluate_video(
             video_path, label, args.detector_url,
-            fall_cfg, hand_cfg,
+            fall_cfg, hand_cfg, head_cfg,
             sample_fps=args.sample_fps,
             save_debug_video=args.save_debug_video,
             debug_video_dir=debug_video_dir,

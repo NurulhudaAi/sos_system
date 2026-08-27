@@ -15,6 +15,7 @@ import cv2, sys, time, yaml, torch, requests, os
 from pathlib import Path
 from collections import defaultdict, deque
 from datetime import datetime, timezone
+from math import ceil
 import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
@@ -123,6 +124,7 @@ def _api(endpoint, frame, timeout=5):
     return {}
 
 def main(src:str, port:int=8081, location:str=""):
+    hand_cfg = cfg.get("hand_sos", {})
     source_id=str(Path(src).resolve()) if Path(src).exists() else str(src)
 
     vlc_mgr=None
@@ -182,9 +184,21 @@ def main(src:str, port:int=8081, location:str=""):
     # [B2] per-track state — ไม่ใช้ hand_d._state global อีกต่อไป
     hand_states: dict[int, int] = {}
     hand_miss:   dict[int, int] = {}
+    hand_first_seen: dict[int, float] = {}
+    hand_temporal_window = max(1, int(hand_cfg.get("temporal_window", 10)))
+    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.4))))
+    hand_temporal_hits_required = max(1, ceil(hand_temporal_window * hand_temporal_threshold))
+    hand_min_bbox_area_norm = max(0.0, float(hand_cfg.get("min_hand_bbox_area_norm", 0.0)))
+    hand_min_track_age_seconds = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.8)))
+    hand_cooldown_seconds = max(0.0, float(hand_cfg.get("cooldown_seconds", alert_cd)))
+    hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
+    # [FIX-FP] นับ state=3 ต่อเนื่องต่อ track — ต้องค้าง ≥ MIN_CONSEC3 เฟรมติดกัน
+    hand_consec3: dict[int, int] = {}
+    MIN_CONSEC3 = max(1, int(hand_cfg.get("min_consec_sos_frames", 3)))
     GRACE_FRAMES = 5
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
+    hand_last_event_ts = 0.0
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
     s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
                                   "motion_hist":deque(maxlen=TRIG_FRAMES),
@@ -198,11 +212,11 @@ def main(src:str, port:int=8081, location:str=""):
             if not ret:
                 retry_count += 1
                 if retry_count > max_retries:
-                    print(f"⚠️  [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
+                    print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
                     break
                 # VLC process died — restart it
                 if vlc_mgr and not vlc_mgr.is_alive():
-                    print(f"⚠️  [VLC] Process died — restarting (attempt {retry_count}/{max_retries}) ...")
+                    print(f" [VLC] Process died — restarting (attempt {retry_count}/{max_retries}) ...")
                     try:
                         cap.release()
                         url = vlc_mgr.restart()
@@ -296,8 +310,9 @@ def main(src:str, port:int=8081, location:str=""):
                                                 # state could suppress a real fall or
                                                 # fake one if this track_id gets reused
                     for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
-                              hand_bt, fall_bc, fall_bf, fall_bt]:
+                          hand_bt, fall_bc, fall_bf, fall_bt, hand_first_seen, hand_consec3]:
                         d.pop(tid, None)
+                    hand_recent_sos.pop(tid, None)
 
             if boxes and kpts and kpts.data:
                 for i in range(len(boxes.xyxy)):
@@ -336,15 +351,25 @@ def main(src:str, port:int=8081, location:str=""):
 
                     # ── Hand SOS ─────────────────────────────────────────
                     # [RTSP FIX] per-person crop → MediaPipe hand detection
-                    # (replaces full-frame detection that couldn't find small hands)
-                    hs = hand_states.get(tid, 0)
+                    prev_hs = hand_states.get(tid, 0)
+                    hs = prev_hs
                     hdet = False
+                    if tid not in hand_first_seen:
+                        hand_first_seen[tid] = time.time()
+                    x1, y1, x2, y2 = bbox
+                    bbox_area_norm = (max(0.0, x2 - x1) * max(0.0, y2 - y1)) / max(1.0, float(w * h))
+                    track_age_sec = time.time() - hand_first_seen[tid]
+                    hand_eligible = (
+                        bbox_area_norm >= hand_min_bbox_area_norm and
+                        track_age_sec >= hand_min_track_age_seconds
+                    )
                     try:
-                        hand_lms = hand_d.process_crop(frame_clahe, bbox)
-                        if hand_lms:
-                            hl = hand_lms[0]  # ใช้มือแรกที่ detect ได้
-                            hdet = True
-                            hs = hand_d.check_sos_step(hs, hl)
+                        if hand_eligible:
+                            hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                            if hand_lms:
+                                hl = hand_lms[0]
+                                hdet = True
+                                hs = hand_d.check_sos_step(hs, hl)
                     except Exception: pass
                     if hdet:
                         hand_miss[tid] = 0
@@ -354,18 +379,33 @@ def main(src:str, port:int=8081, location:str=""):
                             hs = max(0, hs - 1)
                             hand_miss[tid] = 0
                     hand_states[tid]=hs
-                   
-                    if hs==3 and not fall_ev.get(tid):
+                    # [FIX-FP] นับ state=3 ต่อเนื่อง — กัน flicker 1↔3
+                    if hs == 3 and hdet:
+                        hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
+                    else:
+                        hand_consec3[tid] = 0
+                    consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
+                    is_sos_frame = bool(hdet and hs == 3 and hand_eligible and consec_ok)
+                    recent_sos = hand_recent_sos[tid]
+                    recent_sos.append(is_sos_frame)
+                    sos_hits = sum(1 for ok in recent_sos if ok)
+                    temporal_confirmed = (
+                        len(recent_sos) >= hand_temporal_hits_required
+                        and sos_hits >= hand_temporal_hits_required
+                    )
+                    sos_confirmed = temporal_confirmed
+
+                    if sos_confirmed and not fall_ev.get(tid):
                         if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
                             hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
                         hand_ev[tid]=True
-                    elif hand_ev.get(tid):
-                        if hand_bf.get(tid) is not None:
+                    elif hand_ev.get(tid) and not sos_confirmed:
+                        can_emit = (time.time() - hand_last_event_ts) >= hand_cooldown_seconds
+                        if can_emit and hand_bf.get(tid) is not None:
                             hand_bf[tid] = add_sos_badge(hand_bf[tid], "hand_sos", location, hand_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location}
                             img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
                             if img_path:
-                                # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
                                 try:
                                     insert_incident(
                                         event_uuid     = str(uuid.uuid4()),
@@ -383,6 +423,7 @@ def main(src:str, port:int=8081, location:str=""):
                                     )
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
+                                hand_last_event_ts = time.time()
                         hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
 
                     # ── Fall CSV ─────────────────────────────────────────
@@ -477,7 +518,7 @@ if __name__=="__main__":
         while True:
             if not any(p.is_alive() for _,p in procs): print("All done"); break
             time.sleep(5)
-    except KeyboardInterrupt: print("\n⚠️  Stopping …")
+    except KeyboardInterrupt: print("\nStopping …")
     finally:
         for _,p in procs:
             if p.is_alive(): p.terminate()

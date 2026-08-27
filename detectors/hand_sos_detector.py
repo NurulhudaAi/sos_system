@@ -34,6 +34,10 @@ class HandSOSDetector:
         self._fingers_closed_ratio = cfg.get("fingers_closed_ratio", 1.40)  # [RTSP FIX] was 1.25
         self._fingers_closed_min = cfg.get("fingers_closed_min_count", 2)   # [RTSP FIX] was 3
         self._allow_fast_sos = cfg.get("allow_fast_sos", True)  # [RTSP FIX] state 1→3 combined
+        # [FIX-FP] strict ratio สำหรับ fast_sos path เท่านั้น (เข้มกว่า ratio ทั่วไป)
+        self._fingers_closed_strict_ratio = cfg.get("fingers_closed_strict_ratio", 1.20)
+        # [FIX-FP] minimum hand span ก่อนอนุญาต fast_sos (กัน noise keypoint)
+        self._fast_sos_min_hand_span = cfg.get("fast_sos_min_hand_span", 0.04)
         try:
             model_path = self._download_hand_model()
             base_opts  = mp_python.BaseOptions(model_asset_path=model_path)
@@ -133,12 +137,29 @@ class HandSOSDetector:
 
         return closed_count >= self._fingers_closed_min
 
-    def _thumb_and_fingers_closed(self, lm):
-        """[RTSP FIX] Combined check: thumb tucked + fingers closed ในจังหวะเดียว
-        ใช้สำหรับ allow_fast_sos — เปลี่ยน state 1→3 เมื่อเห็นท่ากำมือชัดเจน
-        (ไม่ต้องรอให้ thumb_in เกิดก่อนแล้วค่อย fingers_closed แยกเฟรม)
+    def _fingers_closed_strict(self, lm):
+        """[FIX-FP] Strict version: Tier 1 only, ratio 1.20, ≥4 fingers.
+        ใช้สำหรับ fast_sos path (state 1→3) เท่านั้น — เข้มกว่า _fingers_closed()
         """
-        return self._thumb_in(lm) and self._fingers_closed(lm)
+        wrist = lm[0]
+        def _d(a, b):
+            return ((a.x-b.x)**2 + (a.y-b.y)**2) ** 0.5
+        tips = [8, 12, 16, 20]
+        mcps = [5, 9, 13, 17]
+        closed_count = sum(
+            1 for t, m in zip(tips, mcps)
+            if _d(lm[t], wrist) < _d(lm[m], wrist) * self._fingers_closed_strict_ratio
+        )
+        return closed_count >= 4  # [FIX-FP] ต้องครบ 4/4 นิ้ว
+
+    def _thumb_and_fingers_closed(self, lm):
+        """[FIX-FP] Combined check: thumb tucked + fingers closed (strict, Tier 1 only)
+        + not palm_open — ลดโอกาส fingers_closed กับ palm_open True พร้อมกัน"""
+        return (
+            self._thumb_in(lm)
+            and not self._palm_open(lm)
+            and self._fingers_closed_strict(lm)
+        )
 
     def check_sos_step(self, cur_state, lm):
         """[RTSP FIX] State machine helper — ใช้แทนการเขียน state transition
@@ -160,15 +181,22 @@ class HandSOSDetector:
             return 0
 
         if cur_state == 1:
-            # [RTSP FIX] allow_fast_sos: ถ้า thumb+fingers closed พร้อมกัน → ข้ามไป 3
-            if self._allow_fast_sos and self._thumb_and_fingers_closed(lm):
+            # [FIX-FP] fast_sos: strict ratio 1.20 + 4/4 นิ้ว + hand_span gate + not palm_open
+            if self._allow_fast_sos:
+                hand_span = ((lm[5].x - lm[17].x)**2 + (lm[5].y - lm[17].y)**2) ** 0.5
+                if (hand_span >= self._fast_sos_min_hand_span
+                        and self._fingers_closed_strict(lm)
+                        and not self._palm_open(lm)):
+                    return 3
+            if self._thumb_and_fingers_closed(lm):
                 return 3
             if self._thumb_in(lm):
                 return 2
             return 1
 
         if cur_state == 2:
-            if self._fingers_closed(lm):
+            # [FIX-FP] เพิ่ม not _palm_open() — กัน Tier 2/3 ผ่านขณะมือยังเปิด
+            if self._fingers_closed(lm) and not self._palm_open(lm):
                 return 3
             # [RTSP FIX] ถ้า thumb ยังอยู่ใน + เจอมือ → ค้างที่ 2 (ไม่ decay)
             return 2
