@@ -60,12 +60,14 @@ compatible.
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
 import uvicorn
-import yaml, time, io
+import yaml, time, io, logging
 from pathlib import Path
 import numpy as np
 import cv2
 from ultralytics import YOLO
 import socket
+
+logger = logging.getLogger("model_server")
 
 app = FastAPI()
 ROOT = Path(__file__).resolve().parent
@@ -90,6 +92,10 @@ FALL_POSE_CONF  = GENERAL.get('fall_pose_conf', PERSON_CONF)
 FALL_POSE_CLASS_MAP = GENERAL.get('fall_pose_class_map', {0: 'laying', 1: 'standing'})
 # normalize keys to int (yaml may load them as int already, but be safe)
 FALL_POSE_CLASS_MAP = {int(k): v for k, v in FALL_POSE_CLASS_MAP.items()}
+
+# [NEW] IoU / containment fallback config
+FALL_POSE_IOU_THRESH = cfg.get('fall', {}).get('fall_pose_iou_thresh', 0.3)
+FALL_POSE_CONTAINMENT_FALLBACK = cfg.get('fall', {}).get('fall_pose_containment_fallback', True)
 
 # [CLAHE] Contrast Limited Adaptive Histogram Equalization
 # Improves detection accuracy in low-contrast / variable-lighting conditions.
@@ -357,6 +363,9 @@ def _detect_people(frame, h, w):
             fp_results = yolo_fall_pose(frame, conf=FALL_POSE_CONF)
             fp_dets = _extract_pose_dets(fp_results, h, w, with_posture=True)
 
+            logger.debug("FallGuard detected %d people, generic detected %d",
+                         len(fp_dets), len(people))
+
             # Match FallGuard detections to generic detections by IoU
             for person in people:
                 best_iou, best_fp = 0.0, None
@@ -372,11 +381,57 @@ def _detect_people(frame, h, w):
                     iou = inter / (area_p + area_f - inter) if (area_p + area_f - inter) > 0 else 0
                     if iou > best_iou:
                         best_iou, best_fp = iou, fp
-                if best_fp is not None and best_iou >= 0.3:
+
+                matched = False
+                if best_fp is not None and best_iou >= FALL_POSE_IOU_THRESH:
+                    # Primary match: IoU is sufficient
                     person['posture_class'] = best_fp.get('posture_class')
                     person['posture_conf'] = best_fp.get('posture_conf', 0.0)
+                    matched = True
+                    logger.debug(
+                        "IoU match OK: iou=%.3f posture=%s conf=%.2f "
+                        "generic_bbox=[%.0f,%.0f,%.0f,%.0f] fg_bbox=[%.0f,%.0f,%.0f,%.0f]",
+                        best_iou, best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                        px1, py1, px2, py2, *best_fp['bbox'],
+                    )
+                elif best_fp is not None and FALL_POSE_CONTAINMENT_FALLBACK:
+                    # Fallback: IoU too low but check if FallGuard bbox center
+                    # is inside the generic bbox — same person, just very
+                    # different bbox shape (common when lying flat / prone).
+                    fxc = (best_fp['bbox'][0] + best_fp['bbox'][2]) / 2.0
+                    fyc = (best_fp['bbox'][1] + best_fp['bbox'][3]) / 2.0
+                    if px1 <= fxc <= px2 and py1 <= fyc <= py2:
+                        person['posture_class'] = best_fp.get('posture_class')
+                        person['posture_conf'] = best_fp.get('posture_conf', 0.0)
+                        matched = True
+                        logger.info(
+                            "IoU LOW (%.3f < %.1f) but center-containment matched → "
+                            "applying posture=%s conf=%.2f  "
+                            "generic_bbox=[%.0f,%.0f,%.0f,%.0f] fg_bbox=[%.0f,%.0f,%.0f,%.0f]",
+                            best_iou, FALL_POSE_IOU_THRESH,
+                            best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                            px1, py1, px2, py2, *best_fp['bbox'],
+                        )
+                    else:
+                        logger.warning(
+                            "IoU LOW (%.3f < %.1f) AND center NOT contained → "
+                            "posture_class DROPPED for generic_bbox=[%.0f,%.0f,%.0f,%.0f] "
+                            "fg_bbox=[%.0f,%.0f,%.0f,%.0f] fg_posture=%s fg_conf=%.2f",
+                            best_iou, FALL_POSE_IOU_THRESH,
+                            px1, py1, px2, py2, *best_fp['bbox'],
+                            best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                        )
+                elif best_fp is not None:
+                    logger.warning(
+                        "IoU LOW (%.3f < %.1f), containment fallback DISABLED → "
+                        "posture_class DROPPED for generic_bbox=[%.0f,%.0f,%.0f,%.0f] "
+                        "fg_bbox=[%.0f,%.0f,%.0f,%.0f] fg_posture=%s",
+                        best_iou, FALL_POSE_IOU_THRESH,
+                        px1, py1, px2, py2, *best_fp['bbox'],
+                        best_fp.get('posture_class'),
+                    )
         except Exception as e:
-            print('[model-server] fall-pose overlay error (continuing without posture):', e)
+            logger.error('fall-pose overlay error (continuing without posture): %s', e)
 
     return people
 

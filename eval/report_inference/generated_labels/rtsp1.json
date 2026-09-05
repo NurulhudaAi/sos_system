@@ -1,0 +1,24 @@
+{
+  "video": "rtsp1.mp4",
+  "location": "RTSP Camera",
+  "events": [
+    {
+      "event_type": "hand_sos",
+      "start_sec": 32.78,
+      "end_sec": 36.78,
+      "notes": "auto-generated from inference (T4)"
+    },
+    {
+      "event_type": "hand_sos",
+      "start_sec": 92.83,
+      "end_sec": 96.83,
+      "notes": "auto-generated from inference (T12)"
+    },
+    {
+      "event_type": "hand_sos",
+      "start_sec": 160.64,
+      "end_sec": 164.64,
+      "notes": "auto-generated from inference (T17)"
+    }
+  ]
+}

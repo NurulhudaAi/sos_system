@@ -9,6 +9,19 @@ Fixes applied (Audit รอบ 3):
   [W3] import uuid ย้ายขึ้น top-level
   [W5] Object Guardian alerts ส่ง insert_object_event() ใน pipeline
   [W6] ลบ _get_db import ที่ไม่ได้ใช้
+
+Fixes applied (Audit รอบ 4 — "fall not detected sometimes on RTSP"):
+  [F1] SimpleTracker: IOU-only matching (thresh=0.3) lost the track ID
+       mid-fall because bbox shape changes fast (tall→wide) between
+       consecutive frames, dropping IOU below threshold right when a
+       fall happens. Added a 2nd-pass centroid-distance fallback match
+       so the same physical person keeps their track_id through a fall,
+       instead of silently resetting all of fall_d's accumulated state
+       (_since/_ground_time/etc.) onto a brand-new tid.
+  [F2] Pass posture_class/posture_conf from /detect_all (if the optional
+       custom laying/standing model is configured server-side) through
+       to fall_d.process(), so FallDetector can use it as a direct
+       geometry-independent lying signal.
 """
 import uuid  # [W3] top-level
 import cv2, sys, time, yaml, torch, requests, os
@@ -20,11 +33,12 @@ import numpy as np, multiprocessing, logging
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+logger = logging.getLogger("main")
 
 # ──── Initialize environment (MUST BE FIRST) ────────────────────────────────
 from config.env_manager import init_env
 if not init_env(require_edit=False):
-    print("❌ Environment initialization failed. Exiting.")
+    print("Environment initialization failed. Exiting.")
     sys.exit(1)
 # ────────────────────────────────────────────────────────────────────────────
 
@@ -66,6 +80,10 @@ DEVICE      = ("mps" if torch.backends.mps.is_available() else
                "cuda" if torch.cuda.is_available() else "cpu")
 print(f"[main] Device: {DEVICE}")
 
+# [F1] Tracker tuning — see SimpleTracker docstring below.
+TRACKER_IOU_THRESH        = GEN.get("tracker_iou_thresh", 0.3)
+TRACKER_CENTER_DIST_NORM  = GEN.get("tracker_center_dist_norm", 0.12)  # fraction of frame diagonal
+
 
 class _W:
     def __init__(self,v): self.val=v
@@ -86,24 +104,76 @@ class KeypointsWrapper:
     def __init__(self,data): self.data=[_W(d) for d in data] if data else None
 
 class SimpleTracker:
-    def __init__(self): self.next_id=0; self.tracks={}
+    """[F1] Two-pass IOU + centroid-distance tracker.
+
+    Root cause of "fall sometimes not detected": pure IOU matching
+    (thresh=0.3) fails exactly when it matters most — a person falling
+    changes bbox aspect ratio drastically frame-to-frame (tall/narrow →
+    wide/short) which tanks IOU between consecutive frames, especially
+    with any RTSP frame jitter/drop. When IOU dips below threshold the
+    tracker silently assigns a NEW track_id to the same physical
+    person, which resets ALL of FallDetector's accumulated per-track
+    state (_since, _ground_time, _lying_geom_since, ...) right as the
+    fall is happening — so confirm_seconds/geometry_confirm_seconds
+    never gets to accumulate and no alert fires.
+
+    Fix: after the normal IOU pass, do a second pass for any det/track
+    still unmatched — match by centroid distance (normalized by frame
+    diagonal) instead. A person's bbox center doesn't jump far in one
+    frame at 10fps even while its shape changes a lot, so this recovers
+    the correct identity through a fall without loosening IOU matching
+    for the general (non-falling) case, which stays exactly as before.
+    """
+    def __init__(self, frame_w=1920, frame_h=1080):
+        self.next_id=0; self.tracks={}
+        self._diag = float((frame_w**2 + frame_h**2) ** 0.5)
+
     def _iou(self,a,b):
         x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
         w=max(0,x2-x1);h=max(0,y2-y1);inter=w*h
         aa=max(1e-6,(a[2]-a[0])*(a[3]-a[1]));ab=max(1e-6,(b[2]-b[0])*(b[3]-b[1]))
         return inter/(aa+ab-inter) if (aa+ab-inter)>0 else 0.0
+
+    def _center(self, box):
+        return ((box[0]+box[2])/2.0, (box[1]+box[3])/2.0)
+
+    def _center_dist_norm(self, a, b):
+        ax, ay = self._center(a); bx, by = self._center(b)
+        d = ((ax-bx)**2 + (ay-by)**2) ** 0.5
+        return d / self._diag if self._diag else 1.0
+
     def update(self,dets):
         used=[]
+        unmatched_dets = []
+
+        # ── Pass 1: IOU matching (unchanged — this is the normal case) ──
         for det in dets:
             best_id=None;best_iou=0.0
             for tid,t in self.tracks.items():
                 iou=self._iou(det["bbox"],t["bbox"])
                 if iou>best_iou: best_iou=iou;best_id=tid
-            if best_iou>=0.3 and best_id not in used:
+            if best_iou>=TRACKER_IOU_THRESH and best_id not in used:
+                det["track_id"]=best_id;self.tracks[best_id].update(bbox=det["bbox"],lost=0);used.append(best_id)
+            else:
+                unmatched_dets.append(det)
+
+        # ── Pass 2: [F1] centroid-distance fallback for dets IOU missed.
+        # Only matches against tracks not already claimed this frame, so
+        # this never steals an identity IOU already correctly assigned —
+        # it only rescues the "shape changed too fast for IOU" case.
+        for det in unmatched_dets:
+            best_id=None;best_dist=TRACKER_CENTER_DIST_NORM
+            for tid,t in self.tracks.items():
+                if tid in used:
+                    continue
+                dist=self._center_dist_norm(det["bbox"],t["bbox"])
+                if dist<best_dist: best_dist=dist;best_id=tid
+            if best_id is not None:
                 det["track_id"]=best_id;self.tracks[best_id].update(bbox=det["bbox"],lost=0);used.append(best_id)
             else:
                 tid=self.next_id;self.next_id+=1
                 det["track_id"]=tid;self.tracks[tid]={"bbox":det["bbox"],"lost":0};used.append(tid)
+
         tid_set={d["track_id"] for d in dets}
         for tid in list(self.tracks):
             if tid not in tid_set:
@@ -156,7 +226,7 @@ def main(src:str, port:int=8081, location:str=""):
 
     print(f"[{source_id[-30:]}] Connected | location={location or '?'}")
 
-    tracker =SimpleTracker()
+    tracker =SimpleTracker(frame_w=W, frame_h=H)  # [F1]
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
@@ -200,6 +270,9 @@ def main(src:str, port:int=8081, location:str=""):
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     hand_last_event_ts = 0.0
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
+    _fall_last_event_ts = {}  # per-tid: timestamp of last confirmed fall alert
+    FALL_HYSTERESIS_FACTOR = cfg.get("fall", {}).get("fall_hysteresis_factor", 2.0)
+    FALL_CONFIRM_S = cfg.get("fall", {}).get("confirm_seconds", 4.0)
     s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
                                   "motion_hist":deque(maxlen=TRIG_FRAMES),
                                   "triggered":False,"trigger_time":None,"frames_in_trigger":0})
@@ -262,6 +335,14 @@ def main(src:str, port:int=8081, location:str=""):
             pdets=resp.get("people",[])
             odets=resp.get("objects",[])
 
+            # ── [FALL-DEBUG] no-person vs not-confirmed diagnostic ──
+            if not pdets:
+                logger.debug(
+                    "[FALL-DEBUG] frame %d (%.1fs): "
+                    "no person bbox detected at all (detector returned 0 people)",
+                    n, n / max(1, SAMPLING_FPS),
+                )
+
             # ── Object Guardian ──────────────────────────────────────────
             gp=[{"bbox":d["bbox"],"track_id":i} for i,d in enumerate(pdets)]
             for oa in obj_grd.update(frame,odets,gp,source_id=source_id,location=location):
@@ -291,8 +372,15 @@ def main(src:str, port:int=8081, location:str=""):
                                    [d.get("conf",0.0) for d in assigned],
                                    [d.get("track_id") for d in assigned])
                 kpts=KeypointsWrapper([d.get("keypoints",[]) for d in assigned])
+                # [F2] posture_class/posture_conf from the optional custom
+                # laying/standing model (present only if configured server-
+                # side in model_server.py; empty dicts otherwise → no-op).
+                posture_by_idx = [
+                    (d.get("posture_class"), float(d.get("posture_conf", 0.0)))
+                    for d in assigned
+                ]
             else:
-                boxes=None; kpts=None
+                boxes=None; kpts=None; posture_by_idx=[]
 
             # [W2] cleanup tracks ที่หายไปจากเฟรม
             # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ที่เห็นในเฟรมปัจจุบันเฟรม
@@ -324,7 +412,10 @@ def main(src:str, port:int=8081, location:str=""):
                     x1,y1,x2,y2=bbox
                     if not zones.in_zone((x1+x2)/2/w,(y1+y2)/2/h): continue
 
-                    fr=fall_d.process(tid,kp,bbox,h,w)
+                    posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
+                    fr=fall_d.process(tid,kp,bbox,h,w,
+                                       posture_class=posture_class,
+                                       posture_conf=posture_conf)  # [F2]
 
                     # ── Streaming trigger ────────────────────────────────
                     try:
@@ -428,6 +519,19 @@ def main(src:str, port:int=8081, location:str=""):
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
+                        # [FALL-DEBUG] person found but fall not confirmed
+                        if not fr.get("is_fallen"):
+                            logger.debug(
+                                "[FALL-DEBUG] frame %d (%.1fs) tid=%d: "
+                                "person detected but fall NOT confirmed — "
+                                "ratio=%.2f angle=%.1f is_down=%s ground_time=%s "
+                                "model_lying=%s geom_time=%.1f used_stale_angle=%s",
+                                n, n / max(1, SAMPLING_FPS), tid,
+                                fr.get("bbox_ratio", 0), fr.get("spine_angle", 0),
+                                fr.get("is_down"), fr.get("ground_time"),
+                                fr.get("model_confident_lying"), fr.get("geometry_time", 0),
+                                fr.get("used_stale_angle"),
+                            )
                         try:
                             from pipeline import LOG_DIR
                             lp=LOG_DIR/"fall_vels.csv"
@@ -450,7 +554,26 @@ def main(src:str, port:int=8081, location:str=""):
                     is_confirmed=(fr.get("is_fallen") or esc) and not fr.get("recovered_quickly")
 
                     if (is_critical or is_confirmed):
-                        if not fall_ev.get(tid):
+                        # ── Flapping dedup (hysteresis) ──
+                        # If this tid had a fall alert recently (within
+                        # confirm_seconds * hysteresis_factor), treat it as
+                        # the SAME event — don't dispatch a new alert.
+                        prev_ts = _fall_last_event_ts.get(tid)
+                        dedup_window = FALL_CONFIRM_S * FALL_HYSTERESIS_FACTOR
+                        is_flap = bool(
+                            prev_ts is not None
+                            and (time.time() - prev_ts) < dedup_window
+                        )
+
+                        if is_flap:
+                            logger.debug(
+                                "[FALL-DEDUP] tid=%d: suppressed flapping alert "
+                                "(%.1fs since last event < %.1fs dedup window)",
+                                tid, time.time() - prev_ts, dedup_window,
+                            )
+                            # Keep fall_ev[tid]=True so we don't re-trigger
+                            fall_ev[tid] = True
+                        elif not fall_ev.get(tid):
                             fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
                             fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
                             ex={"track_id":tid,"source":source_id,"location":location,
@@ -479,6 +602,7 @@ def main(src:str, port:int=8081, location:str=""):
                                     )
                                 except Exception as e:
                                     print(f"[DB] fall insert error: {e}")
+                            _fall_last_event_ts[tid] = time.time()
                             fall_ev[tid]=True
                     else:
                         if fall_ev.get(tid):

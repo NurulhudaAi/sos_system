@@ -1,0 +1,14 @@
+video,event_type,track_id,t_sec,confidence
+rtsp1.mp4,hand_sos,4,34.78,1.0
+rtsp1.mp4,hand_sos,12,94.83,1.0
+rtsp1.mp4,hand_sos,17,162.64,1.0
+rtsp11.avi,hand_sos,12,41.21,1.0
+rtsp12.avi,hand_sos,13,67.72,1.0
+rtsp3.mp4,hand_sos,21,28.08,1.0
+rtsp3.mp4,hand_sos,33,88.24,1.0
+rtsp4.mp4,hand_sos,2,13.98,1.0
+rtsp4.mp4,hand_sos,30,76.57,1.0
+rtsp4.mp4,hand_sos,45,140.78,1.0
+rtsp5.avi,hand_sos,3,116.56,1.0
+rtsp5.avi,hand_sos,17,176.59,1.0
+rtsp6.avi,hand_sos,35,74.48,1.0

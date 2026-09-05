@@ -1,0 +1,12 @@
+{
+  "video": "rtsp10.avi",
+  "location": "RTSP Camera",
+  "events": [
+    {
+      "event_type": "fall",
+      "start_sec": 38.48,
+      "end_sec": 42.48,
+      "notes": "auto-generated from inference (T10)"
+    }
+  ]
+}

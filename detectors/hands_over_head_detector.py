@@ -10,8 +10,12 @@ L_EYE       = 1
 R_EYE       = 2
 L_SHOULDER  = 5
 R_SHOULDER  = 6
+L_ELBOW     = 7
+R_ELBOW     = 8
 L_WRIST     = 9
 R_WRIST     = 10
+L_HIP       = 11
+R_HIP       = 12
 
 
 def _kp(kps, i):
@@ -31,12 +35,15 @@ class HandsOverHeadDetector:
       1. Both wrists must be visible (confidence ≥ min_kp_conf)
       2. Both wrists Y-coordinate must be ABOVE nose AND shoulders
          (with configurable margin)
-      3. Must be sustained for ≥ confirm_seconds to avoid false positives
+      3. Body must be upright (not lying down / fallen):
+         shoulders must be above hips in image plane
+      4. Wrists must be at or above elbows
+      5. Must be sustained for ≥ confirm_seconds to avoid false positives
          from temporary arm movements (e.g. stretching, waving)
 
     Config keys (thresholds.yaml → hands_over_head:):
       min_kp_conf        0.3    minimum keypoint confidence
-      confirm_seconds    5.0    sustained duration before trigger
+      confirm_seconds    3.0    sustained duration before trigger
       cooldown_seconds   60     cooldown between consecutive triggers
       margin_above_nose  0.03   wrists must be this fraction of frame height
                                 above the reference point (nose/shoulder)
@@ -44,7 +51,7 @@ class HandsOverHeadDetector:
 
     def __init__(self, cfg: dict):
         self.min_kp_conf      = cfg.get("min_kp_conf", 0.3)
-        self.confirm_s        = cfg.get("confirm_seconds", 5.0)
+        self.confirm_s        = cfg.get("confirm_seconds", 3.0)
         self.cooldown_s       = cfg.get("cooldown_seconds", 60)
         self.margin_above     = cfg.get("margin_above_nose", 0.03)
 
@@ -83,8 +90,12 @@ class HandsOverHeadDetector:
         nose = _kp(kps, NOSE)
         l_shoulder = _kp(kps, L_SHOULDER)
         r_shoulder = _kp(kps, R_SHOULDER)
+        l_elbow = _kp(kps, L_ELBOW)
+        r_elbow = _kp(kps, R_ELBOW)
         l_wrist = _kp(kps, L_WRIST)
         r_wrist = _kp(kps, R_WRIST)
+        l_hip = _kp(kps, L_HIP)
+        r_hip = _kp(kps, R_HIP)
 
         # Check visibility — need both wrists + at least one reference point
         wrists_visible = _vis(l_wrist, self.min_kp_conf) and _vis(r_wrist, self.min_kp_conf)
@@ -122,6 +133,25 @@ class HandsOverHeadDetector:
             l_wrist_y < shoulder_y and
             r_wrist_y < shoulder_y
         )
+
+        # ── Check Upright Torso ──
+        # If hips are visible, ensure person is upright (not lying down / prone)
+        has_hips = _vis(l_hip, self.min_kp_conf) or _vis(r_hip, self.min_kp_conf)
+        if has_hips:
+            hips_y = []
+            if _vis(l_hip, self.min_kp_conf): hips_y.append(float(l_hip[1]))
+            if _vis(r_hip, self.min_kp_conf): hips_y.append(float(r_hip[1]))
+            avg_hip_y = sum(hips_y) / len(hips_y)
+            # Reference/shoulders must be well above hips (lower Y in image)
+            if ref_y >= avg_hip_y - margin_px:
+                gesture_detected = False
+
+        # ── Check Elbows ──
+        # Wrists should be at or above elbows when elbows are visible
+        if _vis(l_elbow, self.min_kp_conf) and l_wrist_y > float(l_elbow[1]) + margin_px:
+            gesture_detected = False
+        if _vis(r_elbow, self.min_kp_conf) and r_wrist_y > float(r_elbow[1]) + margin_px:
+            gesture_detected = False
 
         # Temporal confirmation
         if gesture_detected:

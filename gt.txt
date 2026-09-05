@@ -3,6 +3,5 @@
 53:fall
 88:fall
 91:hand_sos
-142:fall
-151:fall
+152:fall
 156:hand_sos

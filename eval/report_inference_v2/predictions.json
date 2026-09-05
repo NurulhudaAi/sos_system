@@ -1,0 +1,134 @@
+[
+  {
+    "video": "rtsp1.mp4",
+    "event_type": "hand_sos",
+    "track_id": 4,
+    "t_sec": 35.28,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp1.mp4",
+    "event_type": "hand_sos",
+    "track_id": 12,
+    "t_sec": 95.33,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp1.mp4",
+    "event_type": "hand_sos",
+    "track_id": 17,
+    "t_sec": 163.14,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp10.avi",
+    "event_type": "fall",
+    "track_id": 10,
+    "t_sec": 40.48,
+    "confidence": 0.53,
+    "details": {
+      "spine_angle": 32.0,
+      "bbox_ratio": 1.45,
+      "is_critical": false
+    }
+  },
+  {
+    "video": "rtsp3.mp4",
+    "event_type": "hand_sos",
+    "track_id": 21,
+    "t_sec": 29.33,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp3.mp4",
+    "event_type": "hand_sos",
+    "track_id": 33,
+    "t_sec": 89.49,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp4.mp4",
+    "event_type": "hand_sos",
+    "track_id": 2,
+    "t_sec": 14.38,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp4.mp4",
+    "event_type": "hand_sos",
+    "track_id": 30,
+    "t_sec": 76.97,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp4.mp4",
+    "event_type": "hand_sos",
+    "track_id": 45,
+    "t_sec": 141.59,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp5.avi",
+    "event_type": "hand_sos",
+    "track_id": 14,
+    "t_sec": 136.32,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp5.avi",
+    "event_type": "hand_sos",
+    "track_id": 17,
+    "t_sec": 196.85,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp6.avi",
+    "event_type": "hand_sos",
+    "track_id": 35,
+    "t_sec": 75.73,
+    "confidence": 1.0,
+    "details": {
+      "hand_state": 3
+    }
+  },
+  {
+    "video": "rtsp6.avi",
+    "event_type": "pose_sos",
+    "track_id": 49,
+    "t_sec": 128.97,
+    "confidence": 1.0,
+    "details": {
+      "time_held": 5.2
+    }
+  }
+]

@@ -189,7 +189,8 @@ class FallDetector:
     # ------------------------------------------------------------------
 
     def process(self, tid: int, kps, bbox, h: int, w: int,
-                posture_class=None, posture_conf: float = 0.0) -> dict:
+                posture_class=None, posture_conf: float = 0.0,
+                timestamp: float = None) -> dict:
         """Process one detection for track `tid` and return a result dict.
 
         Parameters
@@ -204,7 +205,10 @@ class FallDetector:
                         None if not available — everything still works via
                         geometry/motion as before.
         posture_conf  : confidence for posture_class (0.0 if not available)
+        timestamp     : optional float (video seconds for evaluation / playback;
+                        defaults to time.time() for live stream)
         """
+        now = timestamp if timestamp is not None else time.time()
         x1, y1, x2, y2 = bbox
         ratio = (x2 - x1) / ((y2 - y1) + 1e-6)
 
@@ -212,8 +216,6 @@ class FallDetector:
         ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
         lh, rh = _kp(kps, L_HIP),     _kp(kps, R_HIP)
         has_pose = _vis(ls) and _vis(rs) and _vis(lh) and _vis(rh)
-
-        now = time.time()
 
         # ════════════════════════════════════════════════════════════════
         # FIX (angle default bug): previously `angle` fell back to a
@@ -259,7 +261,12 @@ class FallDetector:
         # ════════════════════════════════════════════════════════════════
         # STAGE 1 — Geometry signals
         # ════════════════════════════════════════════════════════════════
-        is_down_basic = ratio > self.bbox_thresh or angle < self.angle_thresh
+        if has_pose:
+            # When torso keypoints are visible, an upright person (angle >= angle_thresh)
+            # is NOT down unless the bounding box is strongly horizontal.
+            is_down_basic = (angle < self.angle_thresh) or (ratio >= self.geometry_ratio_thresh)
+        else:
+            is_down_basic = ratio > self.bbox_thresh or angle < self.angle_thresh
 
         # Strong geometry: very wide bbox AND very flat torso simultaneously.
         # Used as a keypoint-free fallback (confirm_seconds shortcut).
@@ -330,6 +337,20 @@ class FallDetector:
             or slow_fall_fallback   # FIX 2
             or model_confident_lying  # NEW: model says laying → count as down
         )
+
+        # ── Debug logging: per-track signal breakdown ──
+        if is_down:
+            logger.debug(
+                "tid=%s IS_DOWN: ratio=%.2f angle=%.1f has_pose=%s "
+                "spike=%s low_motion=%s geom_down=%s geom_time=%.1f "
+                "slow_fb=%s model_lying=%s model_time=%.1f "
+                "stale_angle=%s posture=%s posture_conf=%.2f",
+                tid, ratio, angle, has_pose,
+                detect_spike, low_motion, geometry_down, geometry_time,
+                slow_fall_fallback, model_confident_lying, model_lying_time,
+                (not has_pose and angle != 90.0),
+                posture_class, posture_conf,
+            )
 
         # ── Spike bookkeeping ──
         if detect_spike:
@@ -452,9 +473,17 @@ class FallDetector:
 
         if geometry_fallen:
             is_fallen = True  # geometry shortcut (3 s of clear lying posture)
+            logger.info(
+                "tid=%s GEOMETRY SHORTCUT fired: geom_time=%.1f ratio=%.2f angle=%.1f",
+                tid, geometry_time, ratio, angle,
+            )
 
         if model_lying_fallen:
             is_fallen = True  # NEW: model shortcut (2 s of confident "laying" classification)
+            logger.info(
+                "tid=%s MODEL SHORTCUT fired: model_time=%.1f posture=%s conf=%.2f",
+                tid, model_lying_time, posture_class, posture_conf,
+            )
 
         # ── Trip / quick-recovery suppression ──
         recovered_quickly = False

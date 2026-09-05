@@ -33,7 +33,7 @@ class HandSOSDetector:
         self._thumb_ratio = cfg.get("thumb_in_ratio", 0.55)  # [FIX Issue 8] configurable
         self._fingers_closed_ratio = cfg.get("fingers_closed_ratio", 1.40)  # [RTSP FIX] was 1.25
         self._fingers_closed_min = cfg.get("fingers_closed_min_count", 2)   # [RTSP FIX] was 3
-        self._allow_fast_sos = cfg.get("allow_fast_sos", True)  # [RTSP FIX] state 1→3 combined
+        self._allow_fast_sos = cfg.get("allow_fast_sos", False)  # [RTSP FIX] state 1→3 combined
         # [FIX-FP] strict ratio สำหรับ fast_sos path เท่านั้น (เข้มกว่า ratio ทั่วไป)
         self._fingers_closed_strict_ratio = cfg.get("fingers_closed_strict_ratio", 1.20)
         # [FIX-FP] minimum hand span ก่อนอนุญาต fast_sos (กัน noise keypoint)

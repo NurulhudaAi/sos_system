@@ -1,0 +1,43 @@
+[
+  {
+    "video": "rtsp6.avi",
+    "duration_s": 173.6,
+    "events": [
+      {
+        "video": "rtsp6.avi",
+        "timestamp": 34.99,
+        "track_id": 29,
+        "event_type": "hands_over_head",
+        "time_held": 5.2
+      },
+      {
+        "video": "rtsp6.avi",
+        "timestamp": 37.87,
+        "track_id": 9,
+        "event_type": "hand_sos",
+        "state": 3
+      },
+      {
+        "video": "rtsp6.avi",
+        "timestamp": 70.98,
+        "track_id": 60,
+        "event_type": "hand_sos",
+        "state": 3
+      },
+      {
+        "video": "rtsp6.avi",
+        "timestamp": 81.48,
+        "track_id": 61,
+        "event_type": "hand_sos",
+        "state": 3
+      },
+      {
+        "video": "rtsp6.avi",
+        "timestamp": 128.72,
+        "track_id": 60,
+        "event_type": "hands_over_head",
+        "time_held": 5.1
+      }
+    ]
+  }
+]

@@ -26,7 +26,7 @@ danger:
   immobile_seconds: 5
   record_threshold_level: 2
 fall:
-  bbox_ratio_thresh: 0.9
+  bbox_ratio_thresh: 1.2
   confirm_seconds: 4.0
   cooldown_seconds: 120
   critical_seconds: 30.0
@@ -43,6 +43,9 @@ fall:
   spike_thresh_norm: 0.18
   min_model_conf: 0.25
   model_confirm_seconds: 3.0
+  fall_pose_iou_thresh: 0.3
+  fall_pose_containment_fallback: true
+  fall_hysteresis_factor: 2.0
   spine_angle_thresh: 65.0
   sustain_seconds: 1.0
   temporal_threshold: 0.4
@@ -57,7 +60,7 @@ general:
   frame_skip: 1
   person_conf: 0.20
   fall_pose_conf: 0.20
-  yolo_model: "../models/yolov8n.pt"
+  yolo_model: "models/yolov8n-pose.pt"
   fall_pose_model: "../models/FallGuard_YOLOv8Pose.pt" 
   fall_pose_class_map:
     0: laying
@@ -68,12 +71,12 @@ hand_sos:
   min_hand_bbox_area_norm: 0.0015
   min_kp_conf: 0.4
   min_tracking_confidence: 0.25
-  temporal_threshold: 0.4
+  temporal_threshold: 0.6 #0.3 -> 0.6
   temporal_window: 10
   thumb_in_ratio: 0.70
   fingers_closed_ratio: 1.40
   fingers_closed_min_count: 2
-  allow_fast_sos: true
+  allow_fast_sos: false
   min_track_age_seconds: 0.4
   # [FIX-FP] temporal persistence ลด false positive
   fingers_closed_strict_ratio: 1.20
