@@ -52,7 +52,7 @@ class VLCStreamManager:
 
     def _build_cmd(self) -> list:
         sout = (
-            f"#transcode{{vcodec=MJPG,vb=800,scale=1,"
+            f"#transcode{{vcodec=MJPG,vb=4000,scale=1,"
             f"width={self.width},height={self.height},fps={self.fps},"
             f"acodec=none}}"
             f":std{{access=http,mux=mpjpeg,dst=0.0.0.0:{self.port}/}}"

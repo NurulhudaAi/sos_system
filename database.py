@@ -14,6 +14,18 @@ import threading
 import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    # Load .env from current directory or project root
+    env_file = Path(__file__).resolve().parent / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
+    else:
+        load_dotenv()
+except ImportError:
+    pass
 
 from pymongo import MongoClient
 from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
@@ -23,7 +35,7 @@ logger = logging.getLogger("database")
 # ─── Config จาก .env ──────────────────────────────────────────────────────────
 MONGODB_URI            = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 MONGODB_DB_NAME        = os.getenv("MONGODB_DB_NAME", "iam")
-INCIDENTS_COLLECTION   = os.getenv("MONGODB_INCIDENTS_COLLECTION", "cctv_incidents")
+INCIDENTS_COLLECTION   = os.getenv("MONGODB_INCIDENTS_COLLECTION", "Incidents")
 SNAPSHOT_SERVER_URL    = os.getenv("SNAPSHOT_SERVER_URL", "http://127.0.0.1:8000")
 SOURCE_EVENTS_COLLECTION = os.getenv("MONGODB_SOURCE_EVENTS_COLLECTION", "source_events")
 
@@ -48,7 +60,7 @@ def _get_client() -> MongoClient:
         APP_ENV = os.getenv("APP_ENV", "development")
         _tls_allow_invalid = (APP_ENV != "production")
         if _tls_allow_invalid:
-            logger.warning("⚠️  tlsAllowInvalidCertificates=True (dev mode). "
+            logger.warning("tlsAllowInvalidCertificates=True (dev mode). "
                            "Set APP_ENV=production to disable.")
         _local.client = MongoClient(
             MONGODB_URI,
@@ -61,7 +73,7 @@ def _get_client() -> MongoClient:
             maxPoolSize=50,
             minPoolSize=0,
         )
-        logger.info("✅ MongoDB client created")
+        logger.info("MongoDB client created")
     return _local.client
 
 
@@ -114,9 +126,9 @@ def _create_indexes(db):
         db.help_requests.create_index([("status", 1), ("sent_at", -1)])
         db[SOURCE_EVENTS_COLLECTION].create_index([("created_at", -1)])
         db[SOURCE_EVENTS_COLLECTION].create_index([("source_id", 1), ("created_at", -1)])
-        logger.info("✅ MongoDB indexes verified (PRD schema)")
+        logger.info("MongoDB indexes verified (PRD schema)")
     except Exception as e:
-        logger.warning(f"⚠️  Index creation warning: {e}")
+        logger.warning(f"Index creation warning: {e}")
 
 
 # ─── Write: Incident (PRD Schema) ────────────────────────────────────────────
@@ -131,7 +143,7 @@ def insert_incident(
     metadata:       Optional[Dict] = None,
 ) -> str:
     """
-    บันทึก incident ใน PRD schema → cctv_incidents collection
+    บันทึก incident ใน PRD schema → incidents collection
 
     Document structure ตรงกับ PRD Section 10.1:
     {
@@ -167,6 +179,28 @@ def insert_incident(
     except (ValueError, AttributeError):
         ts = now
 
+    meta = dict(metadata or {})
+    img_p = meta.get("image_path") or meta.get("imagePath")
+    s_url = meta.get("snapshotUrl") or meta.get("snapshot_base64")
+    if not s_url and img_p:
+        if str(img_p).startswith("data:image"):
+            s_url = str(img_p)
+        else:
+            s_url = path_to_snapshot_url(img_p)
+    if s_url:
+        meta["snapshotUrl"] = s_url
+
+    # Harmonize metadata fields to match frontend expectation
+    if "source_id" in meta and "cameraId" not in meta:
+        meta["cameraId"] = meta["source_id"]
+
+    raw_b64 = meta.get("snapshot_base64")
+    if not raw_b64 and s_url and str(s_url).startswith("data:image"):
+        try:
+            raw_b64 = str(s_url).split(",", 1)[1]
+        except Exception:
+            raw_b64 = str(s_url)
+
     doc = {
         # ─── ID ───────────────────────────────────────
         "event_uuid":         event_uuid,
@@ -176,6 +210,10 @@ def insert_incident(
         "zone":               zone,
         "confidence":         float(confidence),
         "timestamp":          ts,
+
+        # ─── Snapshot Image URL / Base64 ──────────────
+        "snapshotUrl":        s_url,
+        "snapshot_base64":    raw_b64,
 
         # ─── State Machine (PRD Section 6) ────────────
         "state":              "Open",
@@ -196,28 +234,32 @@ def insert_incident(
         "resolvedAt":         None,
         "resolutionNotes":    "",
 
-        # ─── Timestamps ──────────────────────────────
+        # ─── Timestamps & Audit ───────────────────────
         "createdAt":          now,
         "createdBy":          "system",
         "closedAt":           None,
         "archivedAt":         None,
+        "created":            {"by": None, "at": ts},
+        "updated":            {"by": None, "at": now},
+        "createdAt_sys":      now,
+        "updatedAt_sys":      now,
 
         # ─── Metadata ────────────────────────────────
-        "metadata":           _bson_safe(metadata or {}),
+        "metadata":           _bson_safe(meta),
     }
 
     try:
         db[INCIDENTS_COLLECTION].insert_one(doc)
         logger.info(
-            f"✅ Incident inserted: {event_uuid} | "
+            f"Incident inserted: {event_uuid} | "
             f"{detection_type} | {zone} | {severity}"
         )
         return event_uuid
     except DuplicateKeyError:
-        logger.warning(f"⚠️  Duplicate event_uuid skipped: {event_uuid}")
+        logger.warning(f"Duplicate event_uuid skipped: {event_uuid}")
         return event_uuid
     except Exception as e:
-        logger.error(f"❌ Failed to insert incident: {e}")
+        logger.error(f"Failed to insert incident: {e}")
         raise
 
 
@@ -259,10 +301,10 @@ def insert_object_event(
 
     try:
         result = db.object_events.insert_one(doc)
-        logger.info(f"✅ Object event inserted: {event_type} | {class_name}")
+        logger.info(f"Object event inserted: {event_type} | {class_name}")
         return str(result.inserted_id)
     except Exception as e:
-        logger.error(f"❌ Failed to insert object event: {e}")
+        logger.error(f"Failed to insert object event: {e}")
         raise
 
 
@@ -288,10 +330,10 @@ def insert_help_request(
             "response_time_ms": response_time_ms,
             "error":            error,
         })
-        logger.info(f"✅ Help request logged: {event_uuid} → {status}")
+        logger.info(f"Help request logged: {event_uuid} → {status}")
         return True
     except Exception as e:
-        logger.error(f"❌ Failed to log help request: {e}")
+        logger.error(f"Failed to log help request: {e}")
         return False
 
 
@@ -319,11 +361,11 @@ def insert_source_status(
             "port": port,
             "error": error,
         })
-        logger.info(f"✅ Source status logged in {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
+        logger.info(f"Source status logged in {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
         print(f"[DB] Source status inserted into {SOURCE_EVENTS_COLLECTION}: {source_id} | {status}")
         return True
     except Exception as e:
-        logger.error(f"❌ Failed to log source status: {e}")
+        logger.error(f"Failed to log source status: {e}")
         print(f"[DB] Source status insert failed: {source_id} | {e}")
         return False
 
@@ -339,7 +381,7 @@ def get_event_by_uuid(event_uuid: str) -> Optional[Dict]:
             doc["_id"] = str(doc["_id"])
         return doc
     except Exception as e:
-        logger.error(f"❌ get_event_by_uuid error: {e}")
+        logger.error(f"get_event_by_uuid error: {e}")
         return None
 
 
@@ -357,7 +399,7 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
         )
         return result.modified_count > 0
     except Exception as e:
-        logger.error(f"❌ acknowledge_event error: {e}")
+        logger.error(f"acknowledge_event error: {e}")
         return False
 
 
@@ -378,7 +420,7 @@ def recent_events(limit: int = 50, unacked_only: bool = False, hours: int = 24) 
             d["_id"] = str(d["_id"])
         return docs
     except Exception as e:
-        logger.error(f"❌ recent_events error: {e}")
+        logger.error(f"recent_events error: {e}")
         return []
 
 
@@ -399,20 +441,82 @@ def events_summary() -> Dict:
             "objects_unattended": obj_count,
         }
     except Exception as e:
-        logger.error(f"❌ events_summary error: {e}")
+        logger.error(f"events_summary error: {e}")
         return {"by_type": {}, "open_incidents": 0, "objects_unattended": 0}
+
+
+# ─── Camera Zones Management ──────────────────────────────────────────────────
+
+def update_camera_zones(cam_id: str, zones: list) -> bool:
+    """Save or update active zones for a camera in MongoDB cctv_cameras."""
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        existing = col.find_one({
+            "$or": [
+                {"code": cam_id},
+                {"id": cam_id},
+                {"name": cam_id},
+                {"position_note": cam_id}
+            ]
+        })
+        if existing:
+            res = col.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {
+                    "zones": _bson_safe(zones),
+                    "updated_at": _utcnow()
+                }}
+            )
+        else:
+            res = col.update_one(
+                {"code": cam_id},
+                {"$set": {
+                    "code": cam_id,
+                    "name": cam_id,
+                    "zones": _bson_safe(zones),
+                    "status": "Active",
+                    "created_at": _utcnow(),
+                    "updated_at": _utcnow()
+                }},
+                upsert=True
+            )
+        logger.info(f"Updated zones for camera {cam_id}: {len(zones)} zones")
+        return bool(res.acknowledged)
+    except Exception as e:
+        logger.error(f"Failed to update camera zones for {cam_id}: {e}")
+        return False
+
+
+def get_camera_zones(cam_id: str) -> list:
+    """Retrieve saved zones for a camera from MongoDB cctv_cameras."""
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        cam = col.find_one({
+            "$or": [
+                {"code": cam_id},
+                {"id": cam_id},
+                {"name": cam_id},
+                {"position_note": cam_id}
+            ]
+        })
+        if cam and "zones" in cam and isinstance(cam["zones"], list):
+            return cam["zones"]
+    except Exception as e:
+        logger.debug(f"get_camera_zones error for {cam_id}: {e}")
+    return []
 
 
 # ─── Health check ─────────────────────────────────────────────────────────────
 
 def health_check() -> bool:
-    """เช็คว่าเชื่อม MongoDB ได้ไหม"""
     try:
         _get_client().admin.command("ping")
-        logger.info("✅ MongoDB connection healthy")
+        logger.info("MongoDB connection healthy")
         return True
     except Exception as e:
-        logger.error(f"❌ MongoDB health check failed: {e}")
+        logger.error(f"MongoDB health check failed: {e}")
         return False
 
 
@@ -421,4 +525,4 @@ def health_check() -> bool:
 try:
     _create_indexes(_get_db())
 except Exception as e:
-    logger.warning(f"⚠️  Index initialization deferred: {e}")
+    logger.warning(f"Index initialization deferred: {e}")

@@ -26,14 +26,76 @@ sys.path.insert(0, str(ROOT))
 from detectors.fall_detector import FallDetector
 from detectors.hand_sos_detector import HandSOSDetector
 from detectors.hands_over_head_detector import HandsOverHeadDetector
+from utils import create_bbox_snapshot_base64
+from database import insert_incident
+import uuid
+from datetime import datetime, timezone
+
+
+def _are_both_arms_over_head(kps, conf_thresh=0.25):
+    if len(kps) < 11:
+        return False
+    l_wr, r_wr = kps[9], kps[10]
+    nose = kps[0]
+    l_sh, r_sh = kps[5], kps[6]
+    if float(l_wr[2]) < conf_thresh or float(r_wr[2]) < conf_thresh:
+        return False
+    if float(nose[2]) >= conf_thresh:
+        head_ref = float(nose[1])
+    elif float(l_sh[2]) >= conf_thresh and float(r_sh[2]) >= conf_thresh:
+        head_ref = min(float(l_sh[1]), float(r_sh[1]))
+    else:
+        return False
+    return (float(l_wr[1]) <= head_ref + 15) and (float(r_wr[1]) <= head_ref + 15)
+
+
+def save_debug_snapshot(frame, event_type, video_stem, ts_sec, tid, bbox=None, extra_info="", send_db=True):
+    """
+    Creates an in-memory Base64 snapshot with bounding box only (NO BANNER, NO JPEG to disk),
+    and sends directly to MongoDB.
+    """
+    color = (0, 0, 255) if event_type == "fall" else ((0, 165, 255) if event_type in ("pose_sos", "hands_over_head") else (0, 255, 0))
+    label = f"{event_type.upper()} [tid={tid}] {extra_info}".strip()
+    
+    # In-memory Base64 snapshot with bounding box only (no banner, no jpeg saved to disk)
+    b64_snap = create_bbox_snapshot_base64(frame, bbox=bbox, label=label, color=color, max_width=1280, quality=80)
+    raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+
+    if send_db:
+        try:
+            det_type = "Fall" if event_type == "fall" else "Gesture"
+            ev_uuid = str(uuid.uuid4())
+            db_id = insert_incident(
+                event_uuid     = ev_uuid,
+                detection_type = det_type,
+                zone           = video_stem,
+                confidence     = 0.9,
+                timestamp      = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                severity       = "High",
+                metadata       = {
+                    "source_id":         video_stem,
+                    "track_id":          tid,
+                    "snapshotUrl":       b64_snap,
+                    "snapshot_base64":   raw_b64,
+                    "event_type":        event_type,
+                    "video_timestamp_s": round(ts_sec, 2),
+                    "bbox":              [int(v) for v in bbox] if bbox is not None else None,
+                },
+            )
+            print(f"  💾 [DB INSERTED] {event_type.title()} uuid={ev_uuid} (base64, no banner)")
+        except Exception as e:
+            print(f"  ⚠️ [DB ERROR] {e}")
+
+    return b64_snap
 
 
 class SimpleTracker:
-    def __init__(self, frame_w, frame_h, iou_thresh=0.3, center_dist_norm=0.12):
+    def __init__(self, frame_w, frame_h, iou_thresh=0.3, center_dist_norm=0.12, max_lost=30):
         self.next_id = 0
         self.tracks = {}
         self.iou_thresh = iou_thresh
         self.center_dist_norm = center_dist_norm
+        self.max_lost = max_lost
         self._diag = float((frame_w ** 2 + frame_h ** 2) ** 0.5)
 
     def _iou(self, a, b):
@@ -88,7 +150,7 @@ class SimpleTracker:
         for tid in list(self.tracks):
             if tid not in tid_set:
                 self.tracks[tid]["lost"] += 1
-                if self.tracks[tid]["lost"] > 5:
+                if self.tracks[tid]["lost"] > self.max_lost:
                     del self.tracks[tid]
         return dets
 
@@ -223,18 +285,23 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
     fall_d = FallDetector(fall_cfg)
     hand_d = HandSOSDetector(hand_cfg)
     head_d = HandsOverHeadDetector(head_cfg)
-    tracker = SimpleTracker(frame_w=w, frame_h=h)
+    gen_cfg = cfg.get("general", {})
+    tracker_max_lost = int(gen_cfg.get("tracker_max_lost", max(15, int(fps * 1.5))))
+    tracker_iou = float(gen_cfg.get("tracker_iou_thresh", 0.3))
+    tracker_dist = float(gen_cfg.get("tracker_center_dist_norm", 0.12))
+    tracker = SimpleTracker(frame_w=w, frame_h=h, iou_thresh=tracker_iou, center_dist_norm=tracker_dist, max_lost=tracker_max_lost)
 
     # Hand SOS state tracking
     hand_temporal_window = max(1, int(hand_cfg.get("temporal_window", 10)))
-    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.6))))
+    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.20))))
     hand_temporal_hits_req = max(1, ceil(hand_temporal_window * hand_temporal_threshold))
     hand_min_bbox_area = max(0.0, float(hand_cfg.get("min_hand_bbox_area_norm", 0.0015)))
-    hand_min_track_age = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.4)))
-    min_consec_sos = max(1, int(hand_cfg.get("min_consec_sos_frames", 3)))
+    hand_min_track_age = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.2)))
+    min_consec_sos = max(1, int(hand_cfg.get("min_consec_sos_frames", 1)))
     grace_frames = 5
 
     hand_states, hand_miss, hand_first_seen, hand_consec3 = {}, {}, {}, {}
+    hand_step_time = {}
     hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
 
     # Event tracking & debouncing
@@ -242,9 +309,10 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
     last_fall_event = {}
     last_hand_event = {}
     last_head_event = {}
+    track_prev_center = {}
 
     FALL_COOLDOWN = float(fall_cfg.get("cooldown_seconds", 120))
-    HAND_COOLDOWN = float(hand_cfg.get("cooldown_seconds", 60))
+    HAND_COOLDOWN = float(hand_cfg.get("cooldown_seconds", 8))
     HEAD_COOLDOWN = float(head_cfg.get("cooldown_seconds", 60))
 
     events = []
@@ -283,6 +351,12 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
         for p in assigned:
             tid = p["track_id"]
             bbox = p["bbox"]
+            bx1, by1, bx2, by2 = bbox
+            cx, cy = (bx1 + bx2) / 2.0, (by1 + by2) / 2.0
+            prev_c = track_prev_center.get(tid)
+            vel_px_s = (((cx - prev_c[0])**2 + (cy - prev_c[1])**2)**0.5) * fps if prev_c else 0.0
+            track_prev_center[tid] = (cx, cy)
+
             kp = np.array(p.get("keypoints") or np.zeros((17, 3)))
             posture_class = p.get("posture_class")
             posture_conf = float(p.get("posture_conf", 0.0))
@@ -301,6 +375,10 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
                 prev_f = last_fall_event.get(tid, -1e9)
                 if ts_sec - prev_f >= FALL_COOLDOWN:
                     last_fall_event[tid] = ts_sec
+                    snap_path = save_debug_snapshot(
+                        frame, "fall", video_path.stem, ts_sec, tid, bbox,
+                        extra_info=f"{fr.get('spine_angle', 0.0):.0f}deg {posture_class or ''}"
+                    )
                     events.append({
                         "video": video_path.name,
                         "timestamp": round(ts_sec, 2),
@@ -309,6 +387,7 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
                         "posture": posture_class,
                         "ratio": round(fr.get("bbox_ratio", 0.0), 2),
                         "angle": round(fr.get("spine_angle", 0.0), 1),
+                        "snapshot": snap_path,
                     })
             else:
                 fall_ev[tid] = False
@@ -320,16 +399,29 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
                     prev_h = last_head_event.get(tid, -1e9)
                     if ts_sec - prev_h >= HEAD_COOLDOWN:
                         last_head_event[tid] = ts_sec
+                        snap_path = save_debug_snapshot(
+                            frame, "hands_over_head", video_path.stem, ts_sec, tid, bbox,
+                            extra_info=f"held={head_res.get('time_held', 0.0):.1f}s"
+                        )
                         events.append({
                             "video": video_path.name,
                             "timestamp": round(ts_sec, 2),
                             "track_id": tid,
                             "event_type": "hands_over_head",
                             "time_held": head_res.get("time_held", 0.0),
+                            "snapshot": snap_path,
                         })
 
-            # 3. Hand SOS Detection (suppressed if fallen)
-            if not fall_ev.get(tid, False):
+            # 3. Hand SOS Detection (suppressed if both arms overhead, fallen, lying, or recently fallen)
+            both_overhead = _are_both_arms_over_head(kp)
+            is_lying = (posture_class == "laying") or (fr.get("spine_angle", 90.0) < 40.0) or (fr.get("bbox_ratio", 0.0) > 1.2)
+            recently_fallen = (ts_sec - last_fall_event.get(tid, -1e9)) < 25.0
+            is_moving_fast = vel_px_s > 40.0
+            if both_overhead or fall_ev.get(tid, False) or is_lying or recently_fallen or is_moving_fast:
+                hand_states[tid] = 0
+                hand_consec3[tid] = 0
+                hand_recent_sos[tid].clear()
+            else:
                 prev_hs = hand_states.get(tid, 0)
                 hs = prev_hs
                 hdet = False
@@ -343,13 +435,21 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
 
                 try:
                     if hand_eligible:
-                        hand_lms = hand_d.process_crop(frame_clahe, bbox)
+                        hand_lms = hand_d.process_wrist_crop(frame_clahe, kp, h, w, bbox=bbox)
                         if hand_lms:
                             hl = hand_lms[0]
                             hdet = True
                             hs = hand_d.check_sos_step(hs, hl)
                 except Exception:
                     pass
+
+                # Gesture step timeout: allow up to 3.5s per step
+                if hs != prev_hs:
+                    hand_step_time[tid] = ts_sec
+                elif hs >= 1:
+                    if ts_sec - hand_step_time.get(tid, ts_sec) > 3.5:
+                        hs = 0
+                        hand_consec3[tid] = 0
 
                 if hdet:
                     hand_miss[tid] = 0
@@ -360,7 +460,8 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
                         hand_miss[tid] = 0
                 hand_states[tid] = hs
 
-                if hs == 3 and hdet:
+                is_fist_now = bool(hdet and hs == 3 and not hand_d._palm_open(hl) and hand_d._fingers_closed(hl))
+                if is_fist_now:
                     hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
                 else:
                     hand_consec3[tid] = 0
@@ -376,13 +477,22 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
                     prev_s = last_hand_event.get(tid, -1e9)
                     if ts_sec - prev_s >= HAND_COOLDOWN:
                         last_hand_event[tid] = ts_sec
+                        snap_path = save_debug_snapshot(
+                            frame, "hand_sos", video_path.stem, ts_sec, tid, bbox,
+                            extra_info=f"state={hs}"
+                        )
                         events.append({
                             "video": video_path.name,
                             "timestamp": round(ts_sec, 2),
                             "track_id": tid,
                             "event_type": "hand_sos",
                             "state": hs,
+                            "snapshot": snap_path,
                         })
+                        # Reset tracking state for next SOS gesture
+                        hand_states[tid] = 0
+                        hand_consec3[tid] = 0
+                        hand_recent_sos[tid].clear()
 
     cap.release()
     return {

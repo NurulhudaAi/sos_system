@@ -1,0 +1,475 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CCTV AI Zone & Boundary Editor</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-hover: #2563eb;
+      --success: #10b981;
+      --danger: #ef4444;
+      --accent: #8b5cf6;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 24px; min-height: 100vh; display: flex; flex-direction: column; gap: 20px; }
+
+    header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    h1 { font-size: 1.5rem; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 10px; }
+    .status-badge { font-size: 0.8rem; padding: 4px 10px; border-radius: 9999px; background: #064e3b; color: #34d399; font-weight: 600; }
+
+    .main-grid { display: grid; grid-template-columns: 1fr 340px; gap: 24px; align-items: start; }
+    
+    .canvas-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .top-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      background: #0b1120;
+      padding: 12px;
+      border-radius: 8px;
+    }
+
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-size: 0.75rem; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+    input[type="text"], input[type="number"] {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--primary); }
+
+    .btn {
+      padding: 8px 16px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-success { background: var(--success); color: #fff; }
+    .btn-danger { background: var(--danger); color: #fff; }
+    .btn-secondary { background: #334155; color: #fff; }
+    .btn-secondary:hover { background: #475569; }
+
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 480px;
+    }
+
+    #camera-img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    #drawing-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    .sidebar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .section-title { font-size: 1rem; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+    .detector-checkboxes {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: #0b1120;
+      padding: 12px;
+      border-radius: 8px;
+    }
+    .chk-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .zones-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 280px;
+      overflow-y: auto;
+    }
+    .zone-item {
+      background: #0b1120;
+      border: 1px solid var(--border);
+      padding: 10px 12px;
+      border-radius: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .zone-meta { display: flex; flex-direction: column; gap: 2px; }
+    .zone-name { font-weight: 600; font-size: 0.9rem; }
+    .zone-dets { font-size: 0.75rem; color: var(--muted); }
+
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      background: var(--success);
+      color: #fff;
+      font-weight: 600;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+      display: none;
+      z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>📹 CCTV AI Zone & Boundary Editor</h1>
+    <span class="status-badge" id="system-status">FastAPI :8000 Connected</span>
+  </header>
+
+  <div class="main-grid">
+    <!-- Left: Canvas Card -->
+    <div class="canvas-card">
+      <div class="top-controls">
+        <div class="form-group">
+          <label>Camera ID / Code</label>
+          <input type="text" id="cam-id" value="CAM-D01" style="width: 140px;" />
+        </div>
+        <div class="form-group">
+          <label>Optional Source (RTSP/File)</label>
+          <input type="text" id="cam-source" placeholder="Leave blank to use DB/config" style="width: 260px;" />
+        </div>
+        <button class="btn btn-primary" onclick="captureFrame()" style="margin-top: 18px;">📸 Grab Live Frame</button>
+        <input type="file" id="local-file-input" accept="image/*" style="display: none;" onchange="handleLocalImageUpload(event)" />
+        <button class="btn btn-secondary" onclick="document.getElementById('local-file-input').click()" style="margin-top: 18px;">📁 Upload Image</button>
+        <button class="btn btn-secondary" onclick="loadSavedZones()" style="margin-top: 18px;">📂 Load Zones</button>
+      </div>
+
+      <!-- Drawing Canvas Area -->
+      <div class="canvas-container" id="container">
+        <img id="camera-img" alt="Camera Frame" />
+        <canvas id="drawing-canvas"></canvas>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 0.8rem; color: var(--muted);" id="help-text">
+          💡 <strong>How to draw:</strong> Click to add polygon corners. Click "Add Zone" when finished.
+        </span>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" onclick="clearCurrentDrawing()">↺ Reset Current</button>
+          <button class="btn btn-primary" onclick="addCurrentZone()">➕ Add Zone</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right: Sidebar Zone Settings -->
+    <div class="sidebar">
+      <h2 class="section-title">New Zone Details</h2>
+      
+      <div class="form-group">
+        <label>Zone Name</label>
+        <input type="text" id="new-zone-name" placeholder="e.g. Stairway Fall Zone" value="Stairway-1" />
+      </div>
+
+      <div class="form-group">
+        <label>Active Detectors in this Zone</label>
+        <div class="detector-checkboxes">
+          <label class="chk-label"><input type="checkbox" id="det-fall" checked> 🚨 Fall Detection (fall)</label>
+          <label class="chk-label"><input type="checkbox" id="det-handsos" checked> ✋ Hand SOS (hand_sos)</label>
+          <label class="chk-label"><input type="checkbox" id="det-posesos" checked> 🙌 Hands Up SOS (pose_sos)</label>
+          <label class="chk-label"><input type="checkbox" id="det-object"> 🎒 Object Guardian (object_guardian)</label>
+        </div>
+      </div>
+
+      <h2 class="section-title">Configured Zones (<span id="zones-count">0</span>)</h2>
+      <div class="zones-list" id="zones-list">
+        <!-- Zones dynamically added here -->
+      </div>
+
+      <button class="btn btn-success" onclick="saveZonesToMongo()" style="width: 100%; justify-content: center; padding: 12px;">
+        💾 Save Zones to MongoDB & Hot-Reload
+      </button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const SERVER_URL = "http://127.0.0.1:8000";
+    const img = document.getElementById('camera-img');
+    const canvas = document.getElementById('drawing-canvas');
+    const ctx = canvas.getContext('2d');
+
+    let currentPoints = []; // [[x, y], ...] normalized
+    let configuredZones = []; // [{name, type, detectors, points}]
+    const ZONE_COLORS = ['#10b981', '#3b82f6', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4'];
+
+    function showToast(msg, isError = false) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.style.background = isError ? 'var(--danger)' : 'var(--success)';
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 3500);
+    }
+
+    async function captureFrame() {
+      const camId = document.getElementById('cam-id').value.trim();
+      const source = document.getElementById('cam-source').value.trim();
+      let url = `${SERVER_URL}/api/camera/${encodeURIComponent(camId)}/frame`;
+      if (source) url += `?source=${encodeURIComponent(source)}`;
+
+      try {
+        const res = await fetch(url);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        img.src = URL.createObjectURL(blob);
+        img.onload = () => {
+          resizeCanvas();
+          render();
+          showToast(`Fresh frame captured from ${camId}!`);
+        };
+      } catch (err) {
+        showToast(`Capture failed: ${err.message}`, true);
+      }
+    }
+
+    function handleLocalImageUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        img.src = event.target.result;
+        img.onload = () => {
+          resizeCanvas();
+          render();
+          showToast(`Loaded ${file.name}!`);
+        };
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function resizeCanvas() {
+      canvas.width = img.clientWidth;
+      canvas.height = img.clientHeight;
+    }
+    window.addEventListener('resize', () => {
+      if (img.src) { resizeCanvas(); render(); }
+    });
+
+    // Canvas click to add points
+    canvas.addEventListener('click', (e) => {
+      if (!canvas.width || !canvas.height) return;
+      const rect = canvas.getBoundingClientRect();
+      const nx = (e.clientX - rect.left) / canvas.width;
+      const ny = (e.clientY - rect.top) / canvas.height;
+      currentPoints.push([Number(nx.toFixed(3)), Number(ny.toFixed(3))]);
+      render();
+    });
+
+    function clearCurrentDrawing() {
+      currentPoints = [];
+      render();
+    }
+
+    function addCurrentZone() {
+      if (currentPoints.length < 3) {
+        alert("Please click at least 3 points on the camera frame to form a polygon!");
+        return;
+      }
+      const name = document.getElementById('new-zone-name').value.trim() || `Zone-${configuredZones.length + 1}`;
+      const detectors = [];
+      if (document.getElementById('det-fall').checked) detectors.push('fall');
+      if (document.getElementById('det-handsos').checked) detectors.push('hand_sos');
+      if (document.getElementById('det-posesos').checked) detectors.push('pose_sos');
+      if (document.getElementById('det-object').checked) detectors.push('object_guardian');
+
+      configuredZones.push({
+        name: name,
+        type: 'polygon',
+        detectors: detectors.length > 0 ? detectors : ['all'],
+        points: currentPoints
+      });
+
+      currentPoints = [];
+      updateZonesListUI();
+      render();
+      showToast(`Added ${name}!`);
+    }
+
+    function removeZone(index) {
+      configuredZones.splice(index, 1);
+      updateZonesListUI();
+      render();
+    }
+
+    function updateZonesListUI() {
+      const list = document.getElementById('zones-list');
+      const count = document.getElementById('zones-count');
+      count.innerText = configuredZones.length;
+      list.innerHTML = '';
+
+      configuredZones.forEach((z, idx) => {
+        const col = ZONE_COLORS[idx % ZONE_COLORS.length];
+        const div = document.createElement('div');
+        div.className = 'zone-item';
+        div.innerHTML = `
+          <div class="zone-meta">
+            <div class="zone-name" style="color: ${col};">● ${z.name}</div>
+            <div class="zone-dets">${(z.detectors || []).join(', ')} (${z.points.length} pts)</div>
+          </div>
+          <button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.75rem;" onclick="removeZone(${idx})">✕</button>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const w = canvas.width, h = canvas.height;
+
+      // Draw saved zones
+      configuredZones.forEach((z, idx) => {
+        const col = ZONE_COLORS[idx % ZONE_COLORS.length];
+        drawPolygonOnCanvas(z.points, col, `${z.name} [${(z.detectors||[]).join(',')}]`);
+      });
+
+      // Draw current drawing
+      if (currentPoints.length > 0) {
+        drawPolygonOnCanvas(currentPoints, '#ffffff', 'Drawing...', true);
+      }
+    }
+
+    function drawPolygonOnCanvas(pts, color, label, isDrawing = false) {
+      if (!pts || pts.length === 0) return;
+      const w = canvas.width, h = canvas.height;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.fillStyle = isDrawing ? 'rgba(255, 255, 255, 0.15)' : hexToRgba(color, 0.25);
+
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0] * w, pts[0][1] * h);
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineTo(pts[i][0] * w, pts[i][1] * h);
+      }
+      if (pts.length >= 3) ctx.closePath();
+      ctx.stroke();
+      if (pts.length >= 3) ctx.fill();
+
+      // Points dots
+      pts.forEach(p => {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(p[0] * w, p[1] * h, 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Label
+      if (label && pts.length > 0) {
+        ctx.fillStyle = color;
+        ctx.font = '12px sans-serif';
+        ctx.fillText(label, pts[0][0] * w + 6, Math.max(16, pts[0][1] * h - 6));
+      }
+    }
+
+    function hexToRgba(hex, alpha) {
+      let c = hex.substring(1);
+      if (c.length === 3) c = c.split('').map(x => x + x).join('');
+      const num = parseInt(c, 16);
+      return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+    }
+
+    async function loadSavedZones() {
+      const camId = document.getElementById('cam-id').value.trim();
+      try {
+        const res = await fetch(`${SERVER_URL}/api/camera/${encodeURIComponent(camId)}/zones`);
+        const data = await res.json();
+        configuredZones = (data.zones || []).map(z => ({
+          name: z.name || 'Zone',
+          type: z.type || (z.points ? 'polygon' : 'rectangle'),
+          detectors: z.detectors || ['all'],
+          points: z.points || [[z.x1, z.y1], [z.x2, z.y1], [z.x2, z.y2], [z.x1, z.y2]]
+        }));
+        updateZonesListUI();
+        render();
+        showToast(`Loaded ${configuredZones.length} zones for ${camId} (from ${data.source})`);
+      } catch (err) {
+        showToast(`Failed to load zones: ${err.message}`, true);
+      }
+    }
+
+    async function saveZonesToMongo() {
+      const camId = document.getElementById('cam-id').value.trim();
+      if (configuredZones.length === 0) {
+        if (!confirm("Save 0 zones? (This will enable full-frame detection for all detectors)")) return;
+      }
+      try {
+        const res = await fetch(`${SERVER_URL}/api/camera/${encodeURIComponent(camId)}/zones`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ zones: configuredZones })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        showToast(`✅ Saved ${data.zones_saved} zones to MongoDB! (Hot-reloaded: ${data.hot_reloaded})`);
+      } catch (err) {
+        showToast(`Save failed: ${err.message}`, true);
+      }
+    }
+  </script>
+</body>
+</html>

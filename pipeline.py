@@ -1,8 +1,11 @@
 import cv2, yaml, time, logging, requests, threading, os, json, uuid
+import numpy as np
 from pathlib import Path
 from collections import deque
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List, Dict, Any
+
+from utils import frame_to_base64
 
 ALERT_DIR = Path("alerts")
 LOG_DIR   = Path("logs")
@@ -10,6 +13,15 @@ ALERT_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
 STUMBLE_DIR = LOG_DIR/"stumbles"
 STUMBLE_DIR.mkdir(exist_ok=True)
+
+logger = logging.getLogger("pipeline")
+
+# ─── Global ZoneManager Registry for Hot-Reloading ───────────────────────────
+ZONE_MANAGERS: Dict[str, "ZoneManager"] = {}
+
+def get_zone_manager(cam_id: str) -> Optional["ZoneManager"]:
+    """Look up the active ZoneManager instance for a camera."""
+    return ZONE_MANAGERS.get(str(cam_id))
 
 class CooldownEngine:
     def __init__(self, name, cfg):
@@ -31,36 +43,142 @@ class CooldownEngine:
         return False
 
 class ZoneManager:
-    def __init__(self, path, cam_id):
-        self.zones = []
-        try:
-            d = yaml.safe_load(Path(path).read_text())
-            self.zones = d["cameras"][cam_id]["zones"]
-        except Exception as e:
-            # [FIX] previously silent — a bad path or missing cam_id silently
-            # disables zone filtering (in_zone() then returns True for
-            # everything). Now at least visible in logs/console.
-            print(f"⚠️  [ZoneManager] Could not load zones from {path} "
-                  f"(cam_id={cam_id!r}): {e} — zone filtering disabled, "
-                  f"full frame will be used")
+    """Manages spatial zones (Rectangles & Polygons) with per-detector filtering and hot-reload.
 
-    def in_zone(self, cx, cy):
+    Supports:
+      1. Polygons:   {"name": "stairs", "type": "polygon", "points": [[x,y],...], "detectors": ["fall"]}
+      2. Rectangles: {"name": "room", "x1": 0.1, "y1": 0.2, "x2": 0.8, "y2": 0.9, "detectors": ["hand_sos"]}
+    """
+    def __init__(self, path: Optional[str] = None, cam_id: str = "default", db=None):
+        self.cam_id = str(cam_id)
+        self.path = Path(path) if path else None
+        self.db = db
+        self.zones: List[Dict[str, Any]] = []
+        self._compiled_polys: List[Optional[np.ndarray]] = []
+
+        # Register instance for hot-reloads
+        ZONE_MANAGERS[self.cam_id] = self
+        self.load_zones()
+
+    def load_zones(self, zones_list: Optional[List[Dict[str, Any]]] = None) -> None:
+        """Load zones from a direct list, MongoDB, or fallback YAML file."""
+        if zones_list is not None:
+            self.reload_zones(zones_list)
+            return
+
+        loaded = None
+
+        # 1. Try loading from MongoDB cctv_cameras if db available
+        if self.db is not None:
+            try:
+                database = self.db._get_db() if hasattr(self.db, "_get_db") else self.db
+                col = database["cctv_cameras"]
+                cam = col.find_one({
+                    "$or": [
+                        {"code": self.cam_id},
+                        {"id": self.cam_id},
+                        {"name": self.cam_id},
+                        {"position_note": self.cam_id}
+                    ]
+                })
+                if cam and "zones" in cam and isinstance(cam["zones"], list):
+                    loaded = cam["zones"]
+            except Exception as e:
+                logger.debug(f"[ZoneManager] DB load failed for {self.cam_id}: {e}")
+
+        # 2. Fall back to YAML file
+        if loaded is None and self.path and self.path.exists():
+            try:
+                d = yaml.safe_load(self.path.read_text(encoding="utf-8")) or {}
+                cams = d.get("cameras", {})
+                cam_cfg = cams.get(self.cam_id) or cams.get("default")
+                if cam_cfg:
+                    loaded = cam_cfg.get("zones", [])
+            except Exception as e:
+                print(f"⚠️  [ZoneManager] Could not load zones from {self.path} (cam_id={self.cam_id!r}): {e}")
+
+        self.reload_zones(loaded or [])
+
+    def reload_zones(self, zones_list: List[Dict[str, Any]]) -> None:
+        """Hot-swap active zones in memory safely."""
+        new_zones = []
+        new_compiled = []
+        for z in zones_list:
+            z_copy = dict(z)
+            poly_pts = None
+            pts = z_copy.get("points")
+            if (z_copy.get("type") == "polygon" or pts is not None) and pts:
+                if len(pts) >= 3:
+                    poly_pts = np.array(pts, dtype=np.float32)
+            new_zones.append(z_copy)
+            new_compiled.append(poly_pts)
+
+        self.zones = new_zones
+        self._compiled_polys = new_compiled
+        logger.info(f"[ZoneManager] Active zones for '{self.cam_id}': {len(self.zones)}")
+
+    def in_zone(self, cx: float, cy: float, detector_type: Optional[str] = None) -> bool:
+        """Check if point (cx, cy) is inside a valid zone for detector_type.
+
+        If no zones are configured for this camera, returns True (full frame active).
+        """
         if not self.zones:
             return True
-        return any(z["x1"]<=cx<=z["x2"] and z["y1"]<=cy<=z["y2"]
-                   for z in self.zones)
 
-    def draw(self, frame):
-        h,w = frame.shape[:2]
-        for z in self.zones:
-            cv2.rectangle(frame,
-                (int(z["x1"]*w),int(z["y1"]*h)),
-                (int(z["x2"]*w),int(z["y2"]*h)),(255,255,0),1)
+        has_matching_zone = False
+
+        for i, z in enumerate(self.zones):
+            allowed = z.get("detectors")
+            if allowed and isinstance(allowed, list) and len(allowed) > 0:
+                if detector_type and detector_type not in allowed and "all" not in allowed:
+                    continue
+
+            has_matching_zone = True
+            poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
+            if poly is not None:
+                # cv2.pointPolygonTest: >= 0 means inside or on edge
+                if cv2.pointPolygonTest(poly, (float(cx), float(cy)), False) >= 0:
+                    return True
+            else:
+                x1 = float(z.get("x1", 0.0))
+                y1 = float(z.get("y1", 0.0))
+                x2 = float(z.get("x2", 1.0))
+                y2 = float(z.get("y2", 1.0))
+                if x1 <= cx <= x2 and y1 <= cy <= y2:
+                    return True
+
+        # If matching zones were checked but none contained the point
+        return False
+
+    def draw(self, frame: np.ndarray, color: tuple = (255, 255, 0)) -> None:
+        """Draw zone boundaries and detector tags on the video frame."""
+        if not self.zones:
+            return
+        h, w = frame.shape[:2]
+        for i, z in enumerate(self.zones):
+            name = z.get("name", f"Zone-{i+1}")
+            dets = z.get("detectors")
+            tag = f"{name} ({','.join(dets)})" if dets else name
+
+            poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
+            if poly is not None:
+                pts_px = (poly * np.array([w, h], dtype=np.float32)).astype(np.int32)
+                cv2.polylines(frame, [pts_px], isClosed=True, color=color, thickness=2)
+                if len(pts_px) > 0:
+                    cv2.putText(frame, tag, (pts_px[0][0], max(20, pts_px[0][1] - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+            else:
+                x1, y1 = int(z.get("x1", 0.0) * w), int(z.get("y1", 0.0) * h)
+                x2, y2 = int(z.get("x2", 1.0) * w), int(z.get("y2", 1.0) * h)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, tag, (x1 + 4, max(20, y1 - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
 
 class AlertDispatcher:
     LABELS = {
         "fall":"FALL DETECTED",
         "hand_sos":"SILENT SOS HAND",
+        "pose_sos":"HANDS UP SOS",
         "fall_warning":"FALL WARNING",
     }
 
@@ -84,12 +202,14 @@ class AlertDispatcher:
         self._default_cooldown = default_cooldown
         self._enforce_one_per_file = enforce_one_per_file
         self._file_alerted: set[str] = set()
-        self._last_event: dict[str, float] = {}
+        self.save_local = os.getenv("SAVE_LOCAL_SNAPSHOTS", "true").lower() in ("true", "1", "yes")
 
         try:
             cfg = yaml.safe_load(Path("config/thresholds.yaml").read_text())
         except Exception:
             cfg = {}
+        if "save_local_snapshots" in cfg:
+            self.save_local = bool(cfg["save_local_snapshots"])
         self._danger_cfg = cfg.get('danger', {})
         self._record_only_dangerous = cfg.get('record_only_dangerous', True)
         self._record_threshold = self._danger_cfg.get('record_threshold_level', 2)
@@ -115,6 +235,9 @@ class AlertDispatcher:
         """Return (level_int, level_name, flags)
         level_int: 0=LOG, 1=MED, 2=HIGH, 3=CRITICAL
         """
+        if atype in ("hand_sos", "pose_sos"):
+            return 2, "HIGH", ["SOS_GESTURE"]
+
         level = 0
         level_name = "LOG"
         flags = []
@@ -203,21 +326,21 @@ class AlertDispatcher:
         # ── Stumble / quick recovery → log only, skip alert ──────────────
         try:
             if isinstance(extra, dict) and (extra.get('recovered_quickly') or extra.get('skip_if_recovered')):
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                img_path: Optional[Path] = None
-                try:
-                    img_path = STUMBLE_DIR / f"stumble_{atype}_{ts}.jpg"
-                    cv2.imwrite(str(img_path), frame)
-                except Exception:
-                    img_path = None
-                try:
-                    with open(LOG_DIR/"stumbles.log", "a") as lf:
-                        # FIX 2: ใช้ repr() แทน f-string {} เพื่อหลีก Pylance unhashable
-                        lf.write(f"{datetime.now().isoformat()} | {atype} | {repr(extra)} | "
-                                 f"{img_path.name if img_path else 'none'}\n")
-                except Exception:
-                    pass
-                print(f"STUMBLE RECORDED: {img_path.name if img_path else 'none'}")
+                if self.save_local:
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                    img_path: Optional[Path] = None
+                    try:
+                        img_path = STUMBLE_DIR / f"stumble_{atype}_{ts}.jpg"
+                        cv2.imwrite(str(img_path), frame)
+                    except Exception:
+                        img_path = None
+                    try:
+                        with open(LOG_DIR/"stumbles.log", "a") as lf:
+                            lf.write(f"{datetime.now().isoformat()} | {atype} | {repr(extra)} | "
+                                     f"{img_path.name if img_path else 'none'}\n")
+                    except Exception:
+                        pass
+                print(f"STUMBLE RECORDED: {atype} (recovered quickly)")
                 return None
         except Exception:
             pass
@@ -250,48 +373,44 @@ class AlertDispatcher:
             print(f"ALERT SKIPPED: {self.LABELS.get(atype, atype.upper())} (duplicate within cooldown)")
             return None
 
-        # ── Save image ────────────────────────────────────────────────────
+        # ── Save image or encode Base64 ───────────────────────────────────
         ts         = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         event_uuid = str(uuid.uuid4())
         label      = self.LABELS.get(atype, atype.upper())
-        path       = self.snapshot_dir / f"{atype}_{ts}.jpg"   # FIX 1: ใช้ self.snapshot_dir
-
-        self.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-        except Exception:
-            cv2.imwrite(str(path), frame)
-
         self._last_event[key] = now_ts
 
-        # ── Write metadata JSON ───────────────────────────────────────────
-        try:
-            meta = {
-                'ts': ts, 'event': atype, 'label': label,
-                'file': path.name, 'level': int(level),
-                'level_name': level_name, 'flags': flags,
-                'extra': extra or {}
-            }
-            with open(path.with_suffix('.json'), 'w') as mf:
-                json.dump(meta, mf, indent=2)
-        except Exception:
-            pass
+        # Convert frame to in-memory Base64 data URL
+        b64_url = frame_to_base64(frame)
+        path = None
+
+        if self.save_local:
+            path = self.snapshot_dir / f"{atype}_{ts}.jpg"
+            self.snapshot_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            except Exception:
+                cv2.imwrite(str(path), frame)
+            print(f"📸 [SNAPSHOT SAVED] {path}")
+
+            # ── Write metadata JSON ───────────────────────────────────────────
+            try:
+                meta = {
+                    'ts': ts, 'event': atype, 'label': label,
+                    'file': path.name, 'level': int(level),
+                    'level_name': level_name, 'flags': flags,
+                    'extra': extra or {}
+                }
+                with open(path.with_suffix('.json'), 'w') as mf:
+                    json.dump(meta, mf, indent=2)
+            except Exception:
+                pass
+
+        snapshot_val = str(path) if (self.save_local and path) else b64_url
 
         # ── MongoDB persist ───────────────────────────────────────────────
-        # [FIX] was calling self.db.insert_sos_event() which does not exist in
-        # database.py (only insert_incident() does) — this branch would have
-        # raised on first use. Corrected to match the real signature.
-        #
-        # NOTE: main.py intentionally does NOT pass db= into AlertDispatcher.
-        # main.py already calls insert_incident() itself right after
-        # dispatch() returns an image path. If db= were wired here too, every
-        # fall/hand_sos event would be written to MongoDB twice (the same
-        # double-write bug fixed earlier for alert_logger.log_sos_event()).
-        # Only pass db= here if you also remove the insert_incident() calls
-        # from main.py.
         if self.db:
             try:
-                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "object_event": "ObjectMissing"}
+                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "pose_sos": "Gesture", "object_event": "ObjectMissing"}
                 _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
                 source_id   = extra.get("source_id") if isinstance(extra, dict) else None
                 source_path = extra.get("source")    if isinstance(extra, dict) else None
@@ -308,8 +427,7 @@ class AlertDispatcher:
                         "cameraId": source_id or source_path,
                         "personCount": 1,
                         "trackId": track_id,
-                        "imagePath": str(path),
-                        "metaPath": str(path.with_suffix('.json')),
+                        "imagePath": snapshot_val,
                         "originalEventType": atype,
                         "originalSeverity": level,
                         "originalSeverityName": level_name,
@@ -329,9 +447,9 @@ class AlertDispatcher:
             except Exception:
                 pass
 
-        # FIX 2: ใช้ repr() แทน {} ใน f-string เพื่อหลีก Pylance unhashable warning
-        self._log.warning(f"{label} | {repr(extra)} | {path.name}")
-        print(f"ALERT: {label} | {path.name}")
+        log_name = path.name if path else "in-memory (base64)"
+        self._log.warning(f"{label} | {repr(extra)} | {log_name}")
+        print(f"ALERT: {label} | {log_name}")
 
         # ── Help request ──────────────────────────────────────────────────
         if self.help_dispatcher:
@@ -343,10 +461,10 @@ class AlertDispatcher:
                         location=(extra.get("location") if isinstance(extra, dict) else None) or "unknown",
                         source_id=extra.get("source") if isinstance(extra, dict) else None,
                         track_id=extra.get("track_id") if isinstance(extra, dict) else None,
-                        image_path=str(path), frame=frame, extra=extra,
+                        image_path=snapshot_val, frame=frame, extra=extra,
                     )
             except Exception as e:
                 self._log.warning(f"Help request dispatch failed: {e}")
                 print(f"⚠️  Help request error: {e}")
 
-        return path   # FIX 3: คืน Path เสมอ (ไม่ใช่ True/False)
+        return snapshot_val

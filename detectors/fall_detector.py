@@ -188,6 +188,61 @@ class FallDetector:
     # Main processing entry point
     # ------------------------------------------------------------------
 
+    def _is_sitting(self, kps, bbox) -> bool:
+        """Return True if the person is sitting upright in a chair/sofa/desk (not lying on the ground).
+
+        Key characteristics of sitting:
+          - Bounding box ratio W/H < 1.45 (not a wide flat body lying horizontally on the ground)
+          - Shoulders are clearly above hips: Y_shoulder <= Y_hip - 0.10 * box_h
+          - Head is above shoulders (if head keypoints visible)
+          - Hips are above or level with knees: Y_hip <= Y_knee + 0.08 * box_h
+          - Knees are above or level with ankles: Y_knee <= Y_ankle + 0.08 * box_h
+        """
+        x1, y1, x2, y2 = bbox
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        ratio = box_w / box_h
+        if ratio >= 1.45:
+            return False
+
+        ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
+        lh, rh = _kp(kps, L_HIP),      _kp(kps, R_HIP)
+        lk, rk = _kp(kps, L_KNEE),     _kp(kps, R_KNEE)
+        la, ra = _kp(kps, L_ANKLE),    _kp(kps, R_ANKLE)
+
+        sh_ys = [p[1] for p in (ls, rs) if _vis(p, 0.25)]
+        hip_ys = [p[1] for p in (lh, rh) if _vis(p, 0.25)]
+        knee_ys = [p[1] for p in (lk, rk) if _vis(p, 0.25)]
+        ank_ys = [p[1] for p in (la, ra) if _vis(p, 0.25)]
+
+        if sh_ys and hip_ys:
+            avg_sh_y = sum(sh_ys) / len(sh_ys)
+            avg_hip_y = sum(hip_ys) / len(hip_ys)
+            if avg_hip_y - avg_sh_y < 0.10 * box_h:
+                return False
+
+            # Check head if visible (head must be above shoulders)
+            head_pts = [_kp(kps, i) for i in (0, 1, 2, 3, 4)]
+            head_ys = [p[1] for p in head_pts if _vis(p, 0.25)]
+            if head_ys:
+                avg_head_y = sum(head_ys) / len(head_ys)
+                if avg_head_y > avg_sh_y + 0.05 * box_h:
+                    return False
+
+            if knee_ys:
+                avg_knee_y = sum(knee_ys) / len(knee_ys)
+                if avg_knee_y < avg_hip_y - 0.08 * box_h:
+                    return False
+
+                if ank_ys:
+                    avg_ank_y = sum(ank_ys) / len(ank_ys)
+                    if avg_ank_y < avg_knee_y - 0.08 * box_h:
+                        return False
+
+            return True
+
+        return False
+
     def process(self, tid: int, kps, bbox, h: int, w: int,
                 posture_class=None, posture_conf: float = 0.0,
                 timestamp: float = None) -> dict:
@@ -386,7 +441,9 @@ class FallDetector:
                 self._stand_height[tid] = current_max
 
         stand_h = self._stand_height.get(tid)
-        detect_lying_height = bool(stand_h and bbox_h_norm < stand_h * 0.6)
+        detect_lying_height = bool(
+            stand_h and bbox_h_norm < stand_h * 0.6 and (ratio > 0.85 or angle < self.lying_angle_thresh)
+        )
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 5 — Ground contact detection
@@ -397,6 +454,18 @@ class FallDetector:
             or geometry_down
             or model_confident_lying   # NEW
         )
+
+        # ── Sitting Posture Check (Chair / Sofa) ──
+        # A person sitting upright is NOT a fall. Suppress ground and down states.
+        is_sitting = self._is_sitting(kps, bbox)
+        if is_sitting:
+            is_down = False
+            detect_ground = False
+            self._ground_candidate.pop(tid, None)
+            self._ground_time.pop(tid, None)
+            self._since.pop(tid, None)
+            self._lying_geom_since.pop(tid, None)
+            self._spike_time.pop(tid, None)
 
         if detect_ground:
             self._ground_candidate.setdefault(tid, now)
@@ -485,6 +554,11 @@ class FallDetector:
                 tid, model_lying_time, posture_class, posture_conf,
             )
 
+        # Sitting person is never fallen
+        if is_sitting:
+            is_fallen = False
+            danger_lying = False
+
         # ── Trip / quick-recovery suppression ──
         recovered_quickly = False
         if tid in self._recovered_short:
@@ -509,6 +583,7 @@ class FallDetector:
         return {
             "is_fallen":             bool(is_fallen),
             "is_down":               bool(is_down),
+            "is_sitting":            bool(is_sitting),
             "time_down":             round(time_down_val, 1),
             "bbox_ratio":            round(ratio, 2),
             "spine_angle":           round(angle, 1),

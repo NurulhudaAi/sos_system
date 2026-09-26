@@ -46,7 +46,7 @@ fall:
   fall_pose_iou_thresh: 0.3
   fall_pose_containment_fallback: true
   fall_hysteresis_factor: 2.0
-  spine_angle_thresh: 65.0
+  spine_angle_thresh: 55.0
   sustain_seconds: 1.0
   temporal_threshold: 0.4
   temporal_window: 10
@@ -65,27 +65,36 @@ general:
   fall_pose_class_map:
     0: laying
     1: standing
+  tracker_max_lost: 30
+  tracker_iou_thresh: 0.3
+  tracker_center_dist_norm: 0.12
 hand_sos:
-  cooldown_seconds: 60
+  cooldown_seconds: 30
   min_detection_confidence: 0.30
-  min_hand_bbox_area_norm: 0.0015
-  min_kp_conf: 0.4
+  min_hand_bbox_area_norm: 0.002
+  min_kp_conf: 0.35
   min_tracking_confidence: 0.25
-  temporal_threshold: 0.6 #0.3 -> 0.6
+  temporal_threshold: 0.20
   temporal_window: 10
-  thumb_in_ratio: 0.70
-  fingers_closed_ratio: 1.40
-  fingers_closed_min_count: 2
+  thumb_in_ratio: 0.75
+  fingers_closed_ratio: 1.20
+  fingers_closed_min_count: 3
   allow_fast_sos: false
-  min_track_age_seconds: 0.4
+  min_track_age_seconds: 1.0
   # [FIX-FP] temporal persistence ลด false positive
   fingers_closed_strict_ratio: 1.20
   fast_sos_min_hand_span: 0.04
-  min_consec_sos_frames: 3
+  min_consec_sos_frames: 1
+  # [PRODUCTION FINE-TUNING]
+  elevation_gate_enabled: true
+  wrist_crop_enabled: true
+  elevation_margin_norm: 0.05
+  wrist_crop_padding: 1.4
+  min_crop_size: 160
 
 hands_over_head:
   min_kp_conf: 0.3
-  confirm_seconds: 5.0
+  confirm_seconds: 2.5
   cooldown_seconds: 60
   margin_above_nose: 0.03
 
@@ -96,10 +105,11 @@ object_guardian:
   theft_seconds: 8
   track_iou_threshold: 0.15
   track_max_missed: 15
-record_only_dangerous: false
+record_only_dangerous: true 
+save_local_snapshots: true
 streaming:
   confirmation_window: 30
-  fps: 10
+  fps: 25
   lying_angle_thresh: 45
   rolling_window: 90
   trigger_angle_delta: 30

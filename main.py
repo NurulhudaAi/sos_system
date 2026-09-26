@@ -53,12 +53,13 @@ def _safe_name(s: str) -> str:
     name = re.sub(r"_+", "_", name)
     return name
 
-from detectors.fall_detector     import FallDetector
-from detectors.hand_sos_detector import HandSOSDetector
-from detectors.object_guardian   import ObjectGuardian
+from detectors.fall_detector            import FallDetector
+from detectors.hand_sos_detector        import HandSOSDetector
+from detectors.hands_over_head_detector import HandsOverHeadDetector
+from detectors.object_guardian          import ObjectGuardian
 from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
 from help_request_dispatcher     import HelpRequestDispatcher
-from utils                       import preprocess, Visualizer, add_sos_badge
+from utils                       import preprocess, Visualizer, add_sos_badge, create_bbox_snapshot_base64
 from vlc_stream                  import VLCStreamManager
 from alert_logger                import alert_logger
 import database as db_module
@@ -81,8 +82,9 @@ DEVICE      = ("mps" if torch.backends.mps.is_available() else
 print(f"[main] Device: {DEVICE}")
 
 # [F1] Tracker tuning — see SimpleTracker docstring below.
-TRACKER_IOU_THRESH        = GEN.get("tracker_iou_thresh", 0.3)
-TRACKER_CENTER_DIST_NORM  = GEN.get("tracker_center_dist_norm", 0.12)  # fraction of frame diagonal
+TRACKER_IOU_THRESH        = float(GEN.get("tracker_iou_thresh", 0.3))
+TRACKER_CENTER_DIST_NORM  = float(GEN.get("tracker_center_dist_norm", 0.12))  # fraction of frame diagonal
+TRACKER_MAX_LOST          = int(GEN.get("tracker_max_lost", max(15, int(SAMPLING_FPS * 1.5))))
 
 
 class _W:
@@ -124,9 +126,10 @@ class SimpleTracker:
     the correct identity through a fall without loosening IOU matching
     for the general (non-falling) case, which stays exactly as before.
     """
-    def __init__(self, frame_w=1920, frame_h=1080):
+    def __init__(self, frame_w=1920, frame_h=1080, max_lost=30):
         self.next_id=0; self.tracks={}
         self._diag = float((frame_w**2 + frame_h**2) ** 0.5)
+        self.max_lost = max_lost
 
     def _iou(self,a,b):
         x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
@@ -178,7 +181,7 @@ class SimpleTracker:
         for tid in list(self.tracks):
             if tid not in tid_set:
                 self.tracks[tid]["lost"]+=1
-                if self.tracks[tid]["lost"]>5: del self.tracks[tid]
+                if self.tracks[tid]["lost"]>self.max_lost: del self.tracks[tid]
         return dets
 
     def cleanup_track(self, tid: int):
@@ -193,12 +196,34 @@ def _api(endpoint, frame, timeout=5):
     except Exception: pass
     return {}
 
-def main(src:str, port:int=8081, location:str=""):
+def _are_both_arms_over_head(kps, conf_thresh=0.25):
+    if len(kps) < 11:
+        return False
+    l_wr, r_wr = kps[9], kps[10]
+    nose = kps[0]
+    l_sh, r_sh = kps[5], kps[6]
+    if float(l_wr[2]) < conf_thresh or float(r_wr[2]) < conf_thresh:
+        return False
+    if float(nose[2]) >= conf_thresh:
+        head_ref = float(nose[1])
+    elif float(l_sh[2]) >= conf_thresh and float(r_sh[2]) >= conf_thresh:
+        head_ref = min(float(l_sh[1]), float(r_sh[1]))
+    else:
+        return False
+    return (float(l_wr[1]) <= head_ref + 15) and (float(r_wr[1]) <= head_ref + 15)
+
+
+def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=False, loop:bool=False):
     hand_cfg = cfg.get("hand_sos", {})
-    source_id=str(Path(src).resolve()) if Path(src).exists() else str(src)
+    source_p = Path(src)
+    is_file = source_p.is_file()
+    source_id = str(source_p.resolve()) if is_file else str(src)
 
     vlc_mgr=None
-    if src.startswith("http") or src.startswith("rtsp"):
+    if is_file and not use_vlc:
+        url = str(source_p.resolve())
+        print(f"[main] Reading video file directly: {url}")
+    elif src.startswith("http") or src.startswith("rtsp"):
         url=src
     else:
         vlc_mgr=VLCStreamManager(src=src,width=W,height=H,fps=SAMPLING_FPS,port=port)
@@ -224,13 +249,15 @@ def main(src:str, port:int=8081, location:str=""):
         print(f"[cap] Cannot open: {url}")
         if vlc_mgr: vlc_mgr.stop(); return
 
-    print(f"[{source_id[-30:]}] Connected | location={location or '?'}")
+    print(f"[{source_id[-30:]}] Connected | location={location or '?'} | cam_id={cam_id or 'default'}")
 
-    tracker =SimpleTracker(frame_w=W, frame_h=H)  # [F1]
+    tracker = SimpleTracker(frame_w=W, frame_h=H, max_lost=TRACKER_MAX_LOST)  # [F1]
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
+    head_d  =HandsOverHeadDetector(cfg.get("hands_over_head",{}))
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
-    zones   =ZoneManager(str(ROOT / "config/zones.yaml"), "default")  # [FIX] ROOT-anchored
+    active_cam_id = cam_id or location or "default"
+    zones   =ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=active_cam_id, db=db_module)
     viz     =Visualizer()
 
     alert_cd     = GEN.get("alert_cooldown_seconds", cfg.get("fall",{}).get("cooldown_seconds",120))
@@ -245,7 +272,8 @@ def main(src:str, port:int=8081, location:str=""):
 
     disp=AlertDispatcher(
         cooldowns={"fall":cfg.get("fall",{}).get("cooldown_seconds",alert_cd),
-                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd)}, 
+                   "hand_sos":cfg.get("hand_sos",{}).get("cooldown_seconds",alert_cd),
+                   "pose_sos":cfg.get("hands_over_head",{}).get("cooldown_seconds",alert_cd)}, 
         default_cooldown=alert_cd,
         enforce_one_per_file=GEN.get("one_alert_per_file",False),
         snapshot_dir=snapshot_dir,
@@ -256,19 +284,23 @@ def main(src:str, port:int=8081, location:str=""):
     hand_miss:   dict[int, int] = {}
     hand_first_seen: dict[int, float] = {}
     hand_temporal_window = max(1, int(hand_cfg.get("temporal_window", 10)))
-    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.4))))
+    hand_temporal_threshold = min(1.0, max(0.0, float(hand_cfg.get("temporal_threshold", 0.20))))
     hand_temporal_hits_required = max(1, ceil(hand_temporal_window * hand_temporal_threshold))
     hand_min_bbox_area_norm = max(0.0, float(hand_cfg.get("min_hand_bbox_area_norm", 0.0)))
     hand_min_track_age_seconds = max(0.0, float(hand_cfg.get("min_track_age_seconds", 0.8)))
     hand_cooldown_seconds = max(0.0, float(hand_cfg.get("cooldown_seconds", alert_cd)))
     hand_recent_sos = defaultdict(lambda: deque(maxlen=hand_temporal_window))
-    # [FIX-FP] นับ state=3 ต่อเนื่องต่อ track — ต้องค้าง ≥ MIN_CONSEC3 เฟรมติดกัน
+    # [FIX-FP] นับ state=3 ต่อเนื่องต่อ track
     hand_consec3: dict[int, int] = {}
-    MIN_CONSEC3 = max(1, int(hand_cfg.get("min_consec_sos_frames", 3)))
+    MIN_CONSEC3 = max(1, int(hand_cfg.get("min_consec_sos_frames", 1)))
+    hand_state1_time: dict[int, float] = {}
     GRACE_FRAMES = 5
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
-    hand_last_event_ts = 0.0
+    _hand_last_event_ts: dict[int, float] = {}  # per-tid: cooldown timestamp
+    _pose_last_event_ts: dict[int, float] = {}  # per-tid: cooldown timestamp
+    hand_step_time: dict[int, float] = {}       # per-tid: step transition timestamp
+    pose_cooldown_seconds = max(0.0, float(cfg.get("hands_over_head", {}).get("cooldown_seconds", alert_cd)))
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
     _fall_last_event_ts = {}  # per-tid: timestamp of last confirmed fall alert
     FALL_HYSTERESIS_FACTOR = cfg.get("fall", {}).get("fall_hysteresis_factor", 2.0)
@@ -276,6 +308,7 @@ def main(src:str, port:int=8081, location:str=""):
     s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
                                   "motion_hist":deque(maxlen=TRIG_FRAMES),
                                   "triggered":False,"trigger_time":None,"frames_in_trigger":0})
+    track_prev_center: dict[int, tuple[float, float, float]] = {}
     retry_count = 0
     max_retries = 10
     n=0
@@ -283,6 +316,14 @@ def main(src:str, port:int=8081, location:str=""):
         while True:
             ret,raw=cap.read()
             if not ret:
+                if is_file and not vlc_mgr:
+                    if loop:
+                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                        continue
+                    else:
+                        print(f"[{source_id[-30:]}] Video file reached end of stream — completed.")
+                        break
+
                 retry_count += 1
                 if retry_count > max_retries:
                     print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
@@ -346,6 +387,10 @@ def main(src:str, port:int=8081, location:str=""):
             # ── Object Guardian ──────────────────────────────────────────
             gp=[{"bbox":d["bbox"],"track_id":i} for i,d in enumerate(pdets)]
             for oa in obj_grd.update(frame,odets,gp,source_id=source_id,location=location):
+                obbox = oa.get("bbox") or [0, 0, 0, 0]
+                ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
+                if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
+                    continue
                 # [W5] ส่ง insert_object_event ให้ตรงกับ signature จริงใน database.py
                 try:
                     insert_object_event(
@@ -392,13 +437,13 @@ def main(src:str, port:int=8081, location:str=""):
             # cleanup ยึด grace period เดียวกับที่ tracker ใช้จริง
             if boxes and boxes.id:
                 alive = set(tracker.tracks.keys())
-                dropped = set(hand_states.keys()) - alive
+                dropped = (set(hand_states.keys()) | set(head_d._since.keys())) - alive
                 for tid in dropped:
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
-                                                # state could suppress a real fall or
-                                                # fake one if this track_id gets reused
+                    head_d.cleanup_track(tid)
                     for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
-                          hand_bt, fall_bc, fall_bf, fall_bt, hand_first_seen, hand_consec3]:
+                          hand_bt, fall_bc, fall_bf, fall_bt, hand_first_seen, hand_consec3,
+                          _hand_last_event_ts, _pose_last_event_ts, hand_step_time]:
                         d.pop(tid, None)
                     hand_recent_sos.pop(tid, None)
 
@@ -410,12 +455,18 @@ def main(src:str, port:int=8081, location:str=""):
                     if i>=len(kpts.data): continue
                     kp=kpts.data[i].cpu().numpy()
                     x1,y1,x2,y2=bbox
-                    if not zones.in_zone((x1+x2)/2/w,(y1+y2)/2/h): continue
+                    cx, cy = (x1+x2)/2/max(1, w), (y1+y2)/2/max(1, h)
+                    if not zones.in_zone(cx, cy): continue
 
-                    posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
-                    fr=fall_d.process(tid,kp,bbox,h,w,
-                                       posture_class=posture_class,
-                                       posture_conf=posture_conf)  # [F2]
+                    # ── Fall Detection (Zone-gated) ──────────────────────
+                    in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
+                    if in_fall_zone:
+                        posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
+                        fr=fall_d.process(tid,kp,bbox,h,w,
+                                           posture_class=posture_class,
+                                           posture_conf=posture_conf)  # [F2]
+                    else:
+                        fr={"is_fallen":False, "danger_lying":False, "is_critical":False}
 
                     # ── Streaming trigger ────────────────────────────────
                     try:
@@ -440,82 +491,159 @@ def main(src:str, port:int=8081, location:str=""):
                                 st.update(triggered=False,trigger_time=None,frames_in_trigger=0)
                     except Exception: pass
 
-                    # ── Hand SOS ─────────────────────────────────────────
-                    # [RTSP FIX] per-person crop → MediaPipe hand detection
-                    prev_hs = hand_states.get(tid, 0)
-                    hs = prev_hs
-                    hdet = False
-                    if tid not in hand_first_seen:
-                        hand_first_seen[tid] = time.time()
-                    x1, y1, x2, y2 = bbox
-                    bbox_area_norm = (max(0.0, x2 - x1) * max(0.0, y2 - y1)) / max(1.0, float(w * h))
-                    track_age_sec = time.time() - hand_first_seen[tid]
-                    hand_eligible = (
-                        bbox_area_norm >= hand_min_bbox_area_norm and
-                        track_age_sec >= hand_min_track_age_seconds
-                    )
-                    try:
-                        if hand_eligible:
-                            hand_lms = hand_d.process_crop(frame_clahe, bbox)
-                            if hand_lms:
-                                hl = hand_lms[0]
-                                hdet = True
-                                hs = hand_d.check_sos_step(hs, hl)
-                    except Exception: pass
-                    if hdet:
-                        hand_miss[tid] = 0
-                    else:
-                        hand_miss[tid] = hand_miss.get(tid, 0) + 1
-                        if hand_miss[tid] >= GRACE_FRAMES:
-                            hs = max(0, hs - 1)
-                            hand_miss[tid] = 0
-                    hand_states[tid]=hs
-                    # [FIX-FP] นับ state=3 ต่อเนื่อง — กัน flicker 1↔3
-                    if hs == 3 and hdet:
-                        hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
-                    else:
-                        hand_consec3[tid] = 0
-                    consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
-                    is_sos_frame = bool(hdet and hs == 3 and hand_eligible and consec_ok)
-                    recent_sos = hand_recent_sos[tid]
-                    recent_sos.append(is_sos_frame)
-                    sos_hits = sum(1 for ok in recent_sos if ok)
-                    temporal_confirmed = (
-                        len(recent_sos) >= hand_temporal_hits_required
-                        and sos_hits >= hand_temporal_hits_required
-                    )
-                    sos_confirmed = temporal_confirmed
+                    # ── Hand SOS (Zone-gated) ────────────────────────────
+                    now_t = time.time()
+                    prev_c_info = track_prev_center.get(tid)
+                    track_prev_center[tid] = (cx, cy, now_t)
+                    vel_px_s = 0.0
+                    if prev_c_info:
+                        dt = max(1e-3, now_t - prev_c_info[2])
+                        vel_px_s = (((cx - prev_c_info[0])**2 + (cy - prev_c_info[1])**2)**0.5) / dt
 
-                    if sos_confirmed and not fall_ev.get(tid):
-                        if not hand_ev.get(tid) or conf>hand_bc.get(tid,0):
-                            hand_bc[tid]=conf;hand_bf[tid]=raw.copy();hand_bt[tid]=now_time
-                        hand_ev[tid]=True
-                    elif hand_ev.get(tid) and not sos_confirmed:
-                        can_emit = (time.time() - hand_last_event_ts) >= hand_cooldown_seconds
-                        if can_emit and hand_bf.get(tid) is not None:
-                            hand_bf[tid] = add_sos_badge(hand_bf[tid], "hand_sos", location, hand_bt[tid])
-                            ex={"track_id":tid,"source":source_id,"location":location}
-                            img_path = disp.dispatch("hand_sos",hand_bf[tid],ex)
-                            if img_path:
+                    both_overhead = _are_both_arms_over_head(kp)
+                    is_lying = (
+                        posture_class == "laying" or
+                        fr.get("is_fallen") or
+                        fr.get("danger_lying") or
+                        (fr.get("spine_angle") is not None and float(fr.get("spine_angle")) < 40.0) or
+                        (fr.get("bbox_ratio") is not None and float(fr.get("bbox_ratio")) > 1.2)
+                    )
+                    recently_fallen = (now_t - _fall_last_event_ts.get(tid, -1e9)) < 25.0
+                    is_moving_fast = vel_px_s > 40.0
+
+                    # Suppress Hand SOS if both arms are overhead (Pose SOS), fallen, lying, or moving fast
+                    if both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:
+                        hand_states[tid] = 0
+                        hand_consec3[tid] = 0
+                        hand_recent_sos[tid].clear()
+                    else:
+                        in_hand_zone = zones.in_zone(cx, cy, detector_type="hand_sos")
+                        prev_hs = hand_states.get(tid, 0)
+                        hs = prev_hs
+                        hdet = False
+                        if tid not in hand_first_seen:
+                            hand_first_seen[tid] = now_t
+                        x1, y1, x2, y2 = bbox
+                        bbox_area_norm = (max(0.0, x2 - x1) * max(0.0, y2 - y1)) / max(1.0, float(w * h))
+                        track_age_sec = now_t - hand_first_seen[tid]
+                        hand_eligible = (
+                            in_hand_zone and
+                            bbox_area_norm >= hand_min_bbox_area_norm and
+                            track_age_sec >= hand_min_track_age_seconds
+                        )
+                        try:
+                            if hand_eligible:
+                                hand_lms = hand_d.process_wrist_crop(frame_clahe, kp, h, w, bbox=bbox)
+                                if hand_lms:
+                                    hl = hand_lms[0]
+                                    hdet = True
+                                    hs = hand_d.check_sos_step(hs, hl)
+                        except Exception: pass
+
+                        # Step transition: allow up to 3.5s per step
+                        if hs != prev_hs:
+                            hand_step_time[tid] = now_t
+                        elif hs >= 1:
+                            if now_t - hand_step_time.get(tid, now_t) > 3.5:
+                                hs = 0
+                                hand_consec3[tid] = 0
+
+                        if hdet:
+                            hand_miss[tid] = 0
+                        else:
+                            hand_miss[tid] = hand_miss.get(tid, 0) + 1
+                            if hand_miss[tid] >= GRACE_FRAMES:
+                                hs = max(0, hs - 1)
+                                hand_miss[tid] = 0
+                        # [FIX-FP] นับ state=3 ต่อเนื่อง — ต้องเป็นท่ากำหมัดจริง (นิ้วปิด และไม่ใช่แบมือ)
+                        is_fist_now = bool(hdet and hs == 3 and not hand_d._palm_open(hl) and hand_d._fingers_closed(hl))
+                        if is_fist_now:
+                            hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
+                        else:
+                            hand_consec3[tid] = 0
+                        consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
+                        is_sos_frame = bool(hdet and hs == 3 and hand_eligible and consec_ok)
+                        recent_sos = hand_recent_sos[tid]
+                        recent_sos.append(is_sos_frame)
+                        sos_hits = sum(1 for ok in recent_sos if ok)
+                        temporal_confirmed = (
+                            len(recent_sos) >= hand_temporal_hits_required
+                            and sos_hits >= hand_temporal_hits_required
+                        )
+                        sos_confirmed = temporal_confirmed
+
+                        if sos_confirmed and not fall_ev.get(tid) and not is_lying and not recently_fallen:
+                            can_emit = (now_t - _hand_last_event_ts.get(tid, -1e9)) >= hand_cooldown_seconds
+                            if can_emit and not hand_ev.get(tid):
+                                # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
+                                b64_snap = create_bbox_snapshot_base64(
+                                    raw, bbox=bbox, label=f"HAND SOS [tid={tid}]", color=(0, 255, 0)
+                                )
+                                raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                                 try:
+                                    ev_uuid = str(uuid.uuid4())
                                     insert_incident(
-                                        event_uuid     = str(uuid.uuid4()),
+                                        event_uuid     = ev_uuid,
                                         detection_type = "Gesture",
                                         zone           = location,
                                         confidence     = conf,
                                         timestamp      = datetime.utcnow().isoformat(),
                                         severity       = "High",
                                         metadata       = {
-                                            "source_id":  source_id,
-                                            "track_id":   tid,
-                                            "image_path": str(img_path),
-                                            "gesture":    "hand_sos",
+                                            "source_id":       source_id,
+                                            "track_id":        tid,
+                                            "snapshotUrl":     b64_snap,
+                                            "snapshot_base64": raw_b64,
+                                            "gesture":         "hand_sos",
+                                            "bbox":            [int(v) for v in bbox],
                                         },
                                     )
+                                    print(f"  💾 [DB INSERTED] Hand SOS uuid={ev_uuid} (base64, no banner)")
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
-                                hand_last_event_ts = time.time()
-                        hand_ev[tid]=False;hand_bc[tid]=0;hand_bf[tid]=None;hand_bt[tid]=None
+                                _hand_last_event_ts[tid] = time.time()
+                                hand_states[tid] = 0
+                                hand_consec3[tid] = 0
+                                hand_recent_sos[tid].clear()
+                                hand_ev[tid] = True
+                        else:
+                            if not sos_confirmed:
+                                hand_ev[tid] = False
+
+                    # ── Hands Over Head SOS (Pose SOS) ───────────────────
+                    in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
+                    if in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
+                        head_res = head_d.process(tid, kp, h, w, timestamp=time.time())
+                        can_emit_pose = (now_t - _pose_last_event_ts.get(tid, -1e9)) >= pose_cooldown_seconds
+                        if head_res.get("triggered") and can_emit_pose:
+                            # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
+                            b64_snap = create_bbox_snapshot_base64(
+                                raw, bbox=bbox, label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s", color=(0, 165, 255)
+                            )
+                            raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+                            try:
+                                ev_uuid = str(uuid.uuid4())
+                                insert_incident(
+                                    event_uuid     = ev_uuid,
+                                    detection_type = "Gesture",
+                                    zone           = location,
+                                    confidence     = conf,
+                                    timestamp      = datetime.utcnow().isoformat(),
+                                    severity       = "High",
+                                    metadata       = {
+                                        "source_id":       source_id,
+                                        "track_id":        tid,
+                                        "snapshotUrl":     b64_snap,
+                                        "snapshot_base64": raw_b64,
+                                        "gesture":         "pose_sos",
+                                        "time_held":       head_res.get("time_held", 0.0),
+                                        "bbox":            [int(v) for v in bbox],
+                                    },
+                                )
+                                print(f"  💾 [DB INSERTED] Pose SOS uuid={ev_uuid} (base64, no banner)")
+                            except Exception as e:
+                                print(f"[DB] pose_sos insert error: {e}")
+                            _pose_last_event_ts[tid] = time.time()
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
@@ -574,36 +702,44 @@ def main(src:str, port:int=8081, location:str=""):
                             # Keep fall_ev[tid]=True so we don't re-trigger
                             fall_ev[tid] = True
                         elif not fall_ev.get(tid):
-                            fall_bc[tid]=conf;fall_bf[tid]=raw.copy();fall_bt[tid]=now_time
-                            fall_bf[tid] = add_sos_badge(fall_bf[tid], "fall", location, fall_bt[tid])
-                            ex={"track_id":tid,"source":source_id,"location":location,
-                                "recovered_quickly":fr.get("recovered_quickly"),"fall_result":fr}
-                            if is_critical: ex["critical"]=True
-                            if esc: ex["auto_escalated_immobile"]=True
-                            img_path = disp.dispatch("fall",fall_bf[tid],ex)
-                            if img_path:
-                                lv,ln,flags=disp._assess_alert_level("fall",ex)
-                                # [B1] ลบ alert_logger.log_sos_event() ออก — database.py จัดการแล้ว
-                                try:
-                                    insert_incident(
-                                        event_uuid     = str(uuid.uuid4()),
-                                        detection_type = "Fall",
-                                        zone           = location,
-                                        confidence     = conf,
-                                        timestamp      = now_time,
-                                        severity       = lv,
-                                        metadata       = {
-                                            **ex,
-                                            "severity_name": ln,
-                                            "source_id":     source_id,
-                                            "track_id":      tid,
-                                            "image_path":    str(img_path),
-                                        }
-                                    )
-                                except Exception as e:
-                                    print(f"[DB] fall insert error: {e}")
+                            fall_bc[tid] = conf; fall_bt[tid] = now_time
+                            ex = {
+                                "track_id": tid, "source": source_id, "location": location,
+                                "recovered_quickly": fr.get("recovered_quickly"), "fall_result": fr
+                            }
+                            if is_critical: ex["critical"] = True
+                            if esc: ex["auto_escalated_immobile"] = True
+                            lv, ln, flags = disp._assess_alert_level("fall", ex)
+
+                            # In-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
+                            b64_snap = create_bbox_snapshot_base64(
+                                raw, bbox=bbox, label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg", color=(0, 0, 255)
+                            )
+                            raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+                            try:
+                                ev_uuid = str(uuid.uuid4())
+                                insert_incident(
+                                    event_uuid     = ev_uuid,
+                                    detection_type = "Fall",
+                                    zone           = location,
+                                    confidence     = conf,
+                                    timestamp      = now_time,
+                                    severity       = lv,
+                                    metadata       = {
+                                        **ex,
+                                        "severity_name":   ln,
+                                        "source_id":       source_id,
+                                        "track_id":        tid,
+                                        "snapshotUrl":     b64_snap,
+                                        "snapshot_base64": raw_b64,
+                                        "bbox":            [int(v) for v in bbox],
+                                    }
+                                )
+                                print(f"  💾 [DB INSERTED] Fall uuid={ev_uuid} (base64, no banner)")
+                            except Exception as e:
+                                print(f"[DB] fall insert error: {e}")
                             _fall_last_event_ts[tid] = time.time()
-                            fall_ev[tid]=True
+                            fall_ev[tid] = True
                     else:
                         if fall_ev.get(tid):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
@@ -619,18 +755,90 @@ def main(src:str, port:int=8081, location:str=""):
         print(f"[{source_id[-30:]}] Done.")
 
 def run_source(s):
-    try: main(s["path"],s.get("port",8081),s.get("location",""))
-    except Exception as e: print(f"[run_source] {s.get('id')} error: {e}")
+    try:
+        cid = s.get("id") or s.get("code") or ""
+        main(
+            s["path"],
+            port=s.get("port", 8081),
+            location=s.get("location", ""),
+            cam_id=cid,
+            use_vlc=s.get("use_vlc", False),
+            loop=s.get("loop", False),
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"[run_source] {s.get('id')} error: {e}")
 
 if __name__=="__main__":
     try: multiprocessing.set_start_method("spawn",force=True)
     except RuntimeError: pass
-    all_sources=yaml.safe_load((ROOT/"config/sources.yaml").read_text())["sources"]
-    sources=[s for s in all_sources if s.get("enabled",True)]
+
+    import argparse
+    parser = argparse.ArgumentParser(description="Multi-Source SOS Detection System")
+    parser.add_argument("--source", "-s", type=str, help="Single RTSP stream URL or video file path")
+    parser.add_argument("--dir", "-d", "-dir", dest="dir", type=str, help="Directory containing video files")
+    parser.add_argument("--location", "-l", type=str, default="", help="Location name")
+    parser.add_argument("--cam-id", "-c", type=str, default="", help="Camera ID")
+    parser.add_argument("--port", "-p", type=int, default=8081, help="Streaming port (base)")
+    parser.add_argument("--use-vlc", action="store_true", help="Force transcoding via VLC HTTP stream")
+    parser.add_argument("--loop", action="store_true", help="Loop video file continuously")
+    args, unknown = parser.parse_known_args()
+
+    sources = []
+    if args.source:
+        p = Path(args.source)
+        loc = args.location or (p.stem if p.exists() else "stream")
+        sources.append({
+            "id": args.cam_id or "source_1",
+            "path": args.source,
+            "location": loc,
+            "port": args.port,
+            "use_vlc": args.use_vlc,
+            "loop": args.loop,
+            "enabled": True,
+        })
+    elif args.dir:
+        p = Path(args.dir)
+        if not p.exists():
+            print(f"❌ ไม่พบโฟลเดอร์: {args.dir}")
+            sys.exit(1)
+        vids = sorted([f for f in p.iterdir() if f.suffix.lower() in [".mp4", ".avi", ".mkv", ".m4v", ".mov"]])
+        if not vids:
+            print(f"⚠️ ไม่พบไฟล์วิดีโอในโฟลเดอร์: {args.dir}")
+            sys.exit(1)
+        for i, v in enumerate(vids):
+            sources.append({
+                "id": f"cam_{i+1}",
+                "path": str(v),
+                "location": v.stem,
+                "port": args.port + i,
+                "use_vlc": args.use_vlc,
+                "loop": args.loop,
+                "enabled": True,
+            })
+    elif (ROOT / "config/sources.yaml").exists():
+        try:
+            all_sources = yaml.safe_load((ROOT / "config/sources.yaml").read_text()).get("sources", [])
+            sources = [s for s in all_sources if s.get("enabled", True)]
+        except Exception as e:
+            print(f"⚠️ อ่าน config/sources.yaml ผิดพลาด: {e}")
+    else:
+        print("❌ ไม่พบ config/sources.yaml และไม่มีการระบุ --source หรือ --dir")
+        print("\nตัวอย่างการใช้งาน:")
+        print("  python3 main.py --source 'rtsp://...'")
+        print("  python3 main.py --source '/path/to/video.mp4'")
+        print("  python3 main.py --dir '/path/to/videos_folder'")
+        sys.exit(1)
+
+    if not sources:
+        print("⚠️ ไม่มี Source สำหรับประมวลผล — ออกจากการทำงาน")
+        sys.exit(0)
+
     print(f"\n{'='*60}")
     print(f"🎬 Multi-Source Detection System")
     print(f"{'='*60}")
-    print(f"Enabled: {len(sources)}/{len(all_sources)} sources")
+    print(f"Enabled: {len(sources)} sources")
     for s in sources:
         print(f"  ✓ {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
     print(f"{'='*60}\n")

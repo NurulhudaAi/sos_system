@@ -1,3 +1,4 @@
+
 import time
 import logging
 import numpy as np
@@ -56,12 +57,14 @@ class HandsOverHeadDetector:
         self.margin_above     = cfg.get("margin_above_nose", 0.03)
 
         # Per-track state
-        self._since = {}       # when gesture first detected
-        self._cooldown = {}    # last trigger time
+        self._since = {}          # when gesture first detected
+        self._last_detected = {}  # last timestamp gesture was detected
+        self._cooldown = {}       # last trigger time
 
     def cleanup_track(self, tid: int) -> None:
         """Remove per-track state for a disappeared track."""
         self._since.pop(tid, None)
+        self._last_detected.pop(tid, None)
         self._cooldown.pop(tid, None)
 
     def process(self, tid: int, kps, h: int, w: int, timestamp: float = None) -> dict:
@@ -103,7 +106,8 @@ class HandsOverHeadDetector:
                         (_vis(l_shoulder, self.min_kp_conf) and _vis(r_shoulder, self.min_kp_conf)))
 
         if not wrists_visible or not has_reference:
-            self._since.pop(tid, None)
+            if now - self._last_detected.get(tid, -1e9) > 0.5:
+                self._since.pop(tid, None)
             return {
                 "gesture_detected": False,
                 "is_confirmed": False,
@@ -111,19 +115,30 @@ class HandsOverHeadDetector:
                 "triggered": False,
             }
 
-        # Determine reference Y (higher/lower number = lower in image)
-        # Use nose if visible, otherwise shoulder midpoint
-        if _vis(nose, self.min_kp_conf):
-            ref_y = float(nose[1])
-        else:
-            ref_y = (float(l_shoulder[1]) + float(r_shoulder[1])) / 2
-
-        # Also check shoulders — wrists should be above shoulders too
+        # Shoulders Y
         shoulder_y = float('inf')
         if _vis(l_shoulder, self.min_kp_conf) and _vis(r_shoulder, self.min_kp_conf):
             shoulder_y = min(float(l_shoulder[1]), float(r_shoulder[1]))
 
-        # Both wrists must be ABOVE reference (lower Y value = higher in image)
+        # Calculate torso height if hips visible
+        has_hips = _vis(l_hip, self.min_kp_conf) or _vis(r_hip, self.min_kp_conf)
+        torso_h = 0.0
+        avg_hip_y = 0.0
+        if has_hips and shoulder_y != float('inf'):
+            hips_y = [float(p[1]) for p in (l_hip, r_hip) if _vis(p, self.min_kp_conf)]
+            avg_hip_y = sum(hips_y) / len(hips_y)
+            torso_h = max(10.0, avg_hip_y - shoulder_y)
+
+        # Determine reference Y (lower number = higher in image)
+        # Use nose if visible; otherwise estimate head position above shoulders using torso height
+        if _vis(nose, self.min_kp_conf):
+            ref_y = float(nose[1])
+        elif torso_h > 0.0:
+            ref_y = shoulder_y - 0.25 * torso_h
+        else:
+            ref_y = shoulder_y - margin_px
+
+        # Both wrists must be ABOVE reference head level AND above shoulders
         l_wrist_y = float(l_wrist[1])
         r_wrist_y = float(r_wrist[1])
 
@@ -135,14 +150,7 @@ class HandsOverHeadDetector:
         )
 
         # ── Check Upright Torso ──
-        # If hips are visible, ensure person is upright (not lying down / prone)
-        has_hips = _vis(l_hip, self.min_kp_conf) or _vis(r_hip, self.min_kp_conf)
-        if has_hips:
-            hips_y = []
-            if _vis(l_hip, self.min_kp_conf): hips_y.append(float(l_hip[1]))
-            if _vis(r_hip, self.min_kp_conf): hips_y.append(float(r_hip[1]))
-            avg_hip_y = sum(hips_y) / len(hips_y)
-            # Reference/shoulders must be well above hips (lower Y in image)
+        if has_hips and shoulder_y != float('inf'):
             if ref_y >= avg_hip_y - margin_px:
                 gesture_detected = False
 
@@ -153,13 +161,26 @@ class HandsOverHeadDetector:
         if _vis(r_elbow, self.min_kp_conf) and r_wrist_y > float(r_elbow[1]) + margin_px:
             gesture_detected = False
 
-        # Temporal confirmation
+        # In hands over head, elbows should be above torso center (not resting down at waist/desk)
+        if has_hips and shoulder_y != float('inf'):
+            torso_mid = (shoulder_y + avg_hip_y) / 2.0
+            if _vis(l_elbow, self.min_kp_conf) and float(l_elbow[1]) > torso_mid:
+                gesture_detected = False
+            if _vis(r_elbow, self.min_kp_conf) and float(r_elbow[1]) > torso_mid:
+                gesture_detected = False
+
+        # Temporal confirmation with 0.5s grace period
         if gesture_detected:
-            self._since.setdefault(tid, now)
+            if now - self._last_detected.get(tid, -1e9) > 0.5:
+                self._since[tid] = now
+            self._last_detected[tid] = now
             time_held = now - self._since[tid]
         else:
-            self._since.pop(tid, None)
-            time_held = 0.0
+            if now - self._last_detected.get(tid, -1e9) <= 0.5:
+                time_held = now - self._since.get(tid, now)
+            else:
+                self._since.pop(tid, None)
+                time_held = 0.0
 
         is_confirmed = gesture_detected and time_held >= self.confirm_s
 

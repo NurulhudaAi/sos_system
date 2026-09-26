@@ -57,8 +57,10 @@ falls back exactly to the previous behavior (generic pose model only,
 no posture_class/posture_conf in the response) — fully backward
 compatible.
 """
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Response, Body, Query
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, List, Dict, Any
 import uvicorn
 import yaml, time, io, logging
 from pathlib import Path
@@ -70,6 +72,13 @@ import socket
 logger = logging.getLogger("model_server")
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 ROOT = Path(__file__).resolve().parent
 SNAPSHOT_ROOT = ROOT / "logs" / "snapshots"
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
@@ -566,6 +575,172 @@ async def list_hand_snapshots(limit: int = 10):
         snapshots.append(snap)
 
     return {"snapshots": snapshots, "total": len(snapshots)}
+
+@app.get('/api/incidents/latest')
+async def get_latest_incident():
+    """Retrieve the most recent incident with snapshotUrl from MongoDB Atlas."""
+    try:
+        import database as db
+        col = db._get_db()[db.INCIDENTS_COLLECTION]
+        doc = col.find_one({}, sort=[("createdAt", -1)])
+        if not doc:
+            doc = col.find_one({}, sort=[("_id", -1)])
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            return {"status": "ok", "incident": doc}
+        return {"status": "empty", "incident": None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ─── Camera Frame Grab & Zone Management Endpoints ───────────────────────────
+
+@app.get('/api/camera/{cam_id}/frame')
+async def get_camera_frame(cam_id: str, source: Optional[str] = None):
+    """Grab a single fresh JPEG frame from camera cam_id for boundary drawing.
+
+    source can be passed directly as a query param (e.g. ?source=rtsp://...),
+    or cam_id will be resolved from sources.yaml, MongoDB cctv_cameras, or local file.
+    """
+    input_source = source
+    if not input_source:
+        # 1. Check sources.yaml
+        sources_path = ROOT / "config" / "sources.yaml"
+        if sources_path.exists():
+            try:
+                s_data = yaml.safe_load(sources_path.read_text(encoding="utf-8")) or {}
+                for s in s_data.get("sources", []):
+                    if str(s.get("id")) == cam_id or str(s.get("code")) == cam_id:
+                        input_source = s.get("path")
+                        break
+            except Exception:
+                pass
+
+        # 2. Check MongoDB cctv_cameras
+        if not input_source:
+            try:
+                from config.env_manager import init_env
+                init_env(require_edit=False)
+                import database as db
+                database = db._get_db()
+                cam = database["cctv_cameras"].find_one({
+                    "$or": [
+                        {"code": cam_id},
+                        {"id": cam_id},
+                        {"name": cam_id},
+                        {"position_note": cam_id}
+                    ]
+                })
+                if cam:
+                    input_source = (
+                        cam.get("rtsp_url") or
+                        cam.get("stream_url") or
+                        cam.get("path") or
+                        cam.get("source")
+                    )
+            except Exception as e:
+                logger.debug(f"[get_camera_frame] MongoDB lookup failed: {e}")
+
+        # 3. Fallback: check if cam_id itself is a file or stream
+        if not input_source and (Path(cam_id).exists() or cam_id.startswith("http") or cam_id.startswith("rtsp")):
+            input_source = cam_id
+
+    if not input_source:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No video source found for camera '{cam_id}'. Pass ?source=<rtsp_or_path>"
+        )
+
+    cap = cv2.VideoCapture(input_source)
+    if not cap.isOpened():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to open video source for '{cam_id}': {input_source}"
+        )
+
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret or frame is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read frame from '{cam_id}'"
+        )
+
+    success, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to encode frame to JPEG")
+
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@app.get('/api/camera/{cam_id}/zones')
+async def get_camera_zones(cam_id: str):
+    """Retrieve active boundary zones for camera cam_id."""
+    from pipeline import get_zone_manager
+    zm = get_zone_manager(cam_id)
+    if zm and zm.zones:
+        return {"cam_id": cam_id, "zones": zm.zones, "source": "memory"}
+
+    try:
+        from config.env_manager import init_env
+        init_env(require_edit=False)
+        import database as db
+        db_zones = db.get_camera_zones(cam_id)
+        if db_zones:
+            return {"cam_id": cam_id, "zones": db_zones, "source": "mongodb"}
+    except Exception:
+        pass
+
+    zones_path = ROOT / "config" / "zones.yaml"
+    if zones_path.exists():
+        try:
+            d = yaml.safe_load(zones_path.read_text(encoding="utf-8")) or {}
+            cams = d.get("cameras", {})
+            cfg = cams.get(cam_id) or cams.get("default")
+            if cfg and "zones" in cfg:
+                return {"cam_id": cam_id, "zones": cfg["zones"], "source": "yaml"}
+        except Exception:
+            pass
+
+    return {"cam_id": cam_id, "zones": [], "source": "none"}
+
+
+@app.post('/api/camera/{cam_id}/zones')
+async def save_camera_zones(cam_id: str, payload: Any = Body(...)):
+    """Save zones for camera cam_id to MongoDB and hot-reload in-memory ZoneManager."""
+    zones = None
+    if isinstance(payload, dict):
+        zones = payload.get("zones")
+    elif isinstance(payload, list):
+        zones = payload
+
+    if zones is None:
+        raise HTTPException(status_code=400, detail="Missing 'zones' array in request body")
+
+    # Persist to MongoDB
+    saved_in_db = False
+    try:
+        from config.env_manager import init_env
+        init_env(require_edit=False)
+        import database as db
+        saved_in_db = db.update_camera_zones(cam_id, zones)
+    except Exception as e:
+        logger.error(f"[save_camera_zones] DB save failed: {e}")
+
+    # Hot-reload in-memory if pipeline is running for this camera
+    from pipeline import get_zone_manager
+    zm = get_zone_manager(cam_id)
+    if zm:
+        zm.reload_zones(zones)
+
+    return {
+        "status": "ok",
+        "cam_id": cam_id,
+        "zones_count": len(zones),
+        "zones_saved": len(zones),
+        "saved_in_db": saved_in_db,
+        "hot_reloaded": zm is not None
+    }
 
 if __name__=='__main__':
     # port8000
