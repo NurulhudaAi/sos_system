@@ -210,15 +210,25 @@ class FallDetector:
         lk, rk = _kp(kps, L_KNEE),     _kp(kps, R_KNEE)
         la, ra = _kp(kps, L_ANKLE),    _kp(kps, R_ANKLE)
 
-        sh_ys = [p[1] for p in (ls, rs) if _vis(p, 0.25)]
-        hip_ys = [p[1] for p in (lh, rh) if _vis(p, 0.25)]
+        sh_pts = [p for p in (ls, rs) if _vis(p, 0.25)]
+        hip_pts = [p for p in (lh, rh) if _vis(p, 0.25)]
         knee_ys = [p[1] for p in (lk, rk) if _vis(p, 0.25)]
         ank_ys = [p[1] for p in (la, ra) if _vis(p, 0.25)]
 
-        if sh_ys and hip_ys:
-            avg_sh_y = sum(sh_ys) / len(sh_ys)
-            avg_hip_y = sum(hip_ys) / len(hip_ys)
-            if avg_hip_y - avg_sh_y < 0.10 * box_h:
+        if sh_pts and hip_pts:
+            avg_sh_y = sum(p[1] for p in sh_pts) / len(sh_pts)
+            avg_hip_y = sum(p[1] for p in hip_pts) / len(hip_pts)
+            torso_dy = avg_hip_y - avg_sh_y
+            if torso_dy < 0.10 * box_h:
+                return False
+
+            # Torso upright check: A sitting person has an upright torso (vertical).
+            # From elevated cameras, people lying horizontally on the ground can have hip_y > sh_y,
+            # but their horizontal span dx will be significantly larger than dy (spine is horizontal).
+            avg_sh_x = sum(p[0] for p in sh_pts) / len(sh_pts)
+            avg_hip_x = sum(p[0] for p in hip_pts) / len(hip_pts)
+            torso_dx = abs(avg_hip_x - avg_sh_x)
+            if ratio >= 0.85 and torso_dy < 1.0 * torso_dx:
                 return False
 
             # Check head if visible (head must be above shoulders)

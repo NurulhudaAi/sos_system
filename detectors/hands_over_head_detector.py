@@ -129,24 +129,24 @@ class HandsOverHeadDetector:
             avg_hip_y = sum(hips_y) / len(hips_y)
             torso_h = max(10.0, avg_hip_y - shoulder_y)
 
-        # Determine reference Y (lower number = higher in image)
-        # Use nose if visible; otherwise estimate head position above shoulders using torso height
-        if _vis(nose, self.min_kp_conf):
-            ref_y = float(nose[1])
+        # Determine head reference Y (use top of visible head keypoints 0..4, or estimate from torso)
+        head_pts = [_kp(kps, i) for i in (0, 1, 2, 3, 4) if _vis(_kp(kps, i), self.min_kp_conf)]
+        if head_pts:
+            ref_y = min(float(p[1]) for p in head_pts)
         elif torso_h > 0.0:
             ref_y = shoulder_y - 0.25 * torso_h
         else:
             ref_y = shoulder_y - margin_px
 
-        # Both wrists must be ABOVE reference head level AND above shoulders
+        # Both wrists must be ABOVE shoulders, and at or above head level
         l_wrist_y = float(l_wrist[1])
         r_wrist_y = float(r_wrist[1])
 
         gesture_detected = (
-            l_wrist_y < ref_y - margin_px and
-            r_wrist_y < ref_y - margin_px and
             l_wrist_y < shoulder_y and
-            r_wrist_y < shoulder_y
+            r_wrist_y < shoulder_y and
+            l_wrist_y <= ref_y + margin_px and
+            r_wrist_y <= ref_y + margin_px
         )
 
         # ── Check Upright Torso ──
@@ -169,14 +169,14 @@ class HandsOverHeadDetector:
             if _vis(r_elbow, self.min_kp_conf) and float(r_elbow[1]) > torso_mid:
                 gesture_detected = False
 
-        # Temporal confirmation with 0.5s grace period
+        # Temporal confirmation with 0.8s grace period to tolerate camera / tracker jitter
         if gesture_detected:
-            if now - self._last_detected.get(tid, -1e9) > 0.5:
+            if now - self._last_detected.get(tid, -1e9) > 0.8:
                 self._since[tid] = now
             self._last_detected[tid] = now
             time_held = now - self._since[tid]
         else:
-            if now - self._last_detected.get(tid, -1e9) <= 0.5:
+            if now - self._last_detected.get(tid, -1e9) <= 0.8:
                 time_held = now - self._since.get(tid, now)
             else:
                 self._since.pop(tid, None)
