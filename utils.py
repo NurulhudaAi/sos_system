@@ -120,6 +120,7 @@ def add_sos_badge(frame, event_type: str, location: str = "", time_str: str = ""
         "fall_warning": "FALL WARNING",
         "fall":         "FALL DETECTED",
         "hand_sos":     "SILENT SOS HAND",
+        "pose_sos":     "HANDS UP SOS",
     }
     label = labels.get(event_type, "ALERT")
 
@@ -184,3 +185,63 @@ class Visualizer:
         c = [(150, 150, 150), (255, 200, 0), (0, 165, 255), (0, 220, 0)]
         cv2.putText(frame, f"Hand: {s[state]}", (10, 56),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, c[state], 1)
+
+
+def frame_to_base64(frame, max_width: int = 640, quality: int = 75) -> str:
+    """Convert an OpenCV frame to a compressed JPEG Base64 Data URL in-memory without saving to disk."""
+    if frame is None:
+        return ""
+    import base64
+    try:
+        h, w = frame.shape[:2]
+        if max_width and w > max_width:
+            scale = max_width / float(w)
+            frame = cv2.resize(frame, (max_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+        success, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        if not success:
+            return ""
+        b64 = base64.b64encode(buffer).decode('utf-8')
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception as e:
+        print(f"⚠️ frame_to_base64 error: {e}")
+        return ""
+
+
+def create_bbox_snapshot_base64(
+    frame,
+    bbox=None,
+    label: str = "",
+    color: tuple = (0, 0, 255),
+    max_width: int = 1280,
+    quality: int = 80,
+) -> str:
+    """
+    Creates an in-memory Base64 snapshot with bounding box only (NO BANNER).
+    Does NOT write any JPEG file to disk.
+    Returns: 'data:image/jpeg;base64,...'
+    """
+    if frame is None:
+        return ""
+    img = frame.copy()
+    if bbox is not None:
+        bx1, by1, bx2, by2 = [int(v) for v in bbox]
+        ih, iw = img.shape[:2]
+        bx1, by1 = max(0, bx1), max(0, by1)
+        bx2, by2 = min(iw - 1, bx2), min(ih - 1, by2)
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 3)
+        if label:
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+            bg_y1 = max(0, by1 - lh - 10)
+            bg_y2 = by1
+            cv2.rectangle(img, (bx1, bg_y1), (min(iw - 1, bx1 + lw + 10), bg_y2), color, -1)
+            cv2.putText(
+                img,
+                label,
+                (bx1 + 5, bg_y2 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+    return frame_to_base64(img, max_width=max_width, quality=quality)

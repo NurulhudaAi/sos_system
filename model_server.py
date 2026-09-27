@@ -25,23 +25,67 @@ Config (config/thresholds.yaml -> general:):
 
 If the object model file is missing, object detection is disabled with
 a warning (fall/hand_sos pipeline keeps working — no hard crash).
+
+[FIX — optional custom laying/standing pose model]
+Root cause of "fall sometimes not detected on RTSP": the generic
+COCO-pretrained yolov8n-pose.pt is trained overwhelmingly on standing /
+walking people. Its person-detection confidence (and keypoint
+confidence) commonly degrades — sometimes below `person_conf` entirely —
+for someone lying flat, prone, or partially occluded. When that
+happens, `_detect_people` returns NO bbox for that person at all, so
+FallDetector.process() never even runs for them that frame, regardless
+of how good its geometry/motion logic is downstream.
+
+Fix: support an OPTIONAL second pose model fine-tuned specifically on
+laying/standing posture (see the FallGuard notebook — trains
+yolov8n-pose.pt further with a 2-class laying/standing head, still
+17 keypoints). When configured and loadable, this model is used as the
+PRIMARY person detector (better recall for lying poses, still gives
+keypoints for FallDetector's geometry math) and its class output is
+passed through as `posture_class` / `posture_conf` per person so
+FallDetector can use it as a direct, geometry-independent "this is a
+laying person" signal.
+
+Config (config/thresholds.yaml -> general:):
+    fall_pose_model: "../models/fallguard_yolov8pose.pt"   # optional
+    fall_pose_class_map:                                    # optional override
+      0: laying
+      1: standing
+
+If `fall_pose_model` is not set or the file can't be loaded, everything
+falls back exactly to the previous behavior (generic pose model only,
+no posture_class/posture_conf in the response) — fully backward
+compatible.
 """
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Response, Body, Query
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional, List, Dict, Any
 import uvicorn
-import yaml, time, io
+import yaml, time, io, logging
 from pathlib import Path
 import numpy as np
 import cv2
 from ultralytics import YOLO
 import socket
 
+logger = logging.getLogger("model_server")
+
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 ROOT = Path(__file__).resolve().parent
 SNAPSHOT_ROOT = ROOT / "logs" / "snapshots"
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 GENERAL = cfg.get('general', {})
-YOLO_MODEL = GENERAL.get('yolo_model', '../models/yolov8n-pose.pt')
+_yolo_model_str = GENERAL.get('yolo_model', 'models/yolov8m-pose.pt')
+_p = ROOT / _yolo_model_str if not Path(_yolo_model_str).is_absolute() else Path(_yolo_model_str)
+YOLO_MODEL = str(_p) if _p.exists() else _yolo_model_str
 PERSON_CONF = GENERAL.get('person_conf', 0.30)
 
 # [FIX] Separate general-object detection model config
@@ -52,6 +96,17 @@ OBJECT_CONF  = GENERAL.get(
     'object_conf',
     cfg.get('object_guardian', {}).get('min_confidence', 0.4)
 )
+
+# [NEW] Optional custom laying/standing pose model config
+FALL_POSE_MODEL = GENERAL.get('fall_pose_model')  # None = disabled, use generic pose model only
+FALL_POSE_CONF  = GENERAL.get('fall_pose_conf', PERSON_CONF)
+FALL_POSE_CLASS_MAP = GENERAL.get('fall_pose_class_map', {0: 'laying', 1: 'standing'})
+# normalize keys to int (yaml may load them as int already, but be safe)
+FALL_POSE_CLASS_MAP = {int(k): v for k, v in FALL_POSE_CLASS_MAP.items()}
+
+# [NEW] IoU / containment fallback config
+FALL_POSE_IOU_THRESH = cfg.get('fall', {}).get('fall_pose_iou_thresh', 0.3)
+FALL_POSE_CONTAINMENT_FALLBACK = cfg.get('fall', {}).get('fall_pose_containment_fallback', True)
 
 # [CLAHE] Contrast Limited Adaptive Histogram Equalization
 # Improves detection accuracy in low-contrast / variable-lighting conditions.
@@ -85,12 +140,31 @@ except Exception as e:
           f"Object Guardian will see zero objects until '{OBJECT_MODEL}' "
           f"is available. Fall/hand_sos detection is unaffected.")
 
+# [NEW] load optional custom laying/standing pose model once.
+# When present, this REPLACES the generic pose model as the primary
+# person detector (better recall on lying/prone poses), while still
+# providing 17-keypoint output for FallDetector's geometry math.
+yolo_fall_pose = None
+if FALL_POSE_MODEL:
+    try:
+        print(f"[model-server] Loading custom fall-pose model: {FALL_POSE_MODEL}")
+        yolo_fall_pose = YOLO(FALL_POSE_MODEL)
+        print(f"[model-server] Custom fall-pose model loaded "
+              f"(classes={yolo_fall_pose.names})")
+    except Exception as e:
+        yolo_fall_pose = None
+        print(f"⚠️  [model-server] Custom fall-pose model NOT loaded ({e}) — "
+              f"falling back to generic pose model only. Set "
+              f"general.fall_pose_model in thresholds.yaml once your "
+              f"trained weights (e.g. FallGuard_YOLOv8Pose.pt) are in place.")
+
 @app.get('/health')
 def health():
     return {
         "status": "ok",
         "device": DEVICE,
         "object_model_loaded": yolo_obj is not None,
+        "fall_pose_model_loaded": yolo_fall_pose is not None,
         "clahe_enabled": CLAHE_ENABLED,
     }
 
@@ -192,15 +266,14 @@ def _apply_clahe(frame):
         return frame
 
 
-def _detect_people(frame, h, w):
-    """Pose-model people detection with keypoints (unchanged logic)."""
-    people = []
-    try:
-        results = yolo(frame, conf=PERSON_CONF, classes=[0])
-    except Exception as e:
-        print('[model-server] pose inference error', e)
-        return people
+def _extract_pose_dets(results, h, w, with_posture=False):
+    """Shared parsing for a pose-model result set → list of person dicts.
 
+    When with_posture=True, also reads results[0].boxes.cls (the
+    laying/standing class head of the custom fall-pose model) and
+    attaches posture_class/posture_conf per detection.
+    """
+    people = []
     if not results or results[0].boxes is None:
         return people
 
@@ -222,6 +295,16 @@ def _detect_people(frame, h, w):
             confs = list(boxes.conf)
         except Exception:
             confs = []
+
+    classes = None
+    if with_posture:
+        try:
+            classes = boxes.cls.cpu().numpy().astype(int).tolist()
+        except Exception:
+            try:
+                classes = [int(c) for c in boxes.cls]
+            except Exception:
+                classes = None
 
     kpts_all = []
     if kpts is not None and getattr(kpts, 'data', None) is not None:
@@ -253,9 +336,116 @@ def _detect_people(frame, h, w):
         x1, y1, x2, y2 = [float(v) for v in box]
         conf = float(confs[i_box]) if i_box < len(confs) else 0.0
         kp = kpts_all[i_box] if i_box < len(kpts_all) else []
-        people.append({'bbox': [x1, y1, x2, y2], 'conf': conf, 'keypoints': kp})
+        person = {'bbox': [x1, y1, x2, y2], 'conf': conf, 'keypoints': kp}
+        if with_posture and classes is not None and i_box < len(classes):
+            cls_id = classes[i_box]
+            person['posture_class'] = FALL_POSE_CLASS_MAP.get(cls_id, str(cls_id))
+            person['posture_conf'] = conf
+        people.append(person)
 
     return people
+
+
+def _detect_people(frame, h, w):
+    """People detection with keypoints.
+
+    [FIX] Uses the generic COCO pose model as the PRIMARY person detector
+    (best recall for all poses/distances), then OVERLAYS posture_class/
+    posture_conf from the optional custom fall-pose model by IoU matching.
+
+    Previously the custom model REPLACED the generic model, but it has
+    much lower recall (92% miss rate on rtsp1.mp4) — it was trained on a
+    small laying/standing dataset and doesn't generalize to all camera
+    angles/distances.  The generic model detects people reliably; the
+    custom model adds posture classification on top.
+    """
+    # Step 1: Generic YOLO for person bboxes + keypoints (primary)
+    try:
+        results = yolo(frame, conf=PERSON_CONF, classes=[0])
+    except Exception as e:
+        print('[model-server] pose inference error', e)
+        return []
+
+    people = _extract_pose_dets(results, h, w, with_posture=False)
+
+    # Step 2: If FallGuard model is available, run it and overlay posture
+    if yolo_fall_pose is not None and people:
+        try:
+            fp_results = yolo_fall_pose(frame, conf=FALL_POSE_CONF)
+            fp_dets = _extract_pose_dets(fp_results, h, w, with_posture=True)
+
+            logger.debug("FallGuard detected %d people, generic detected %d",
+                         len(fp_dets), len(people))
+
+            # Match FallGuard detections to generic detections by IoU
+            for person in people:
+                best_iou, best_fp = 0.0, None
+                px1, py1, px2, py2 = person['bbox']
+                for fp in fp_dets:
+                    fx1, fy1, fx2, fy2 = fp['bbox']
+                    ix1 = max(px1, fx1); iy1 = max(py1, fy1)
+                    ix2 = min(px2, fx2); iy2 = min(py2, fy2)
+                    iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
+                    inter = iw * ih
+                    area_p = max(1e-6, (px2-px1)*(py2-py1))
+                    area_f = max(1e-6, (fx2-fx1)*(fy2-fy1))
+                    iou = inter / (area_p + area_f - inter) if (area_p + area_f - inter) > 0 else 0
+                    if iou > best_iou:
+                        best_iou, best_fp = iou, fp
+
+                matched = False
+                if best_fp is not None and best_iou >= FALL_POSE_IOU_THRESH:
+                    # Primary match: IoU is sufficient
+                    person['posture_class'] = best_fp.get('posture_class')
+                    person['posture_conf'] = best_fp.get('posture_conf', 0.0)
+                    matched = True
+                    logger.debug(
+                        "IoU match OK: iou=%.3f posture=%s conf=%.2f "
+                        "generic_bbox=[%.0f,%.0f,%.0f,%.0f] fg_bbox=[%.0f,%.0f,%.0f,%.0f]",
+                        best_iou, best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                        px1, py1, px2, py2, *best_fp['bbox'],
+                    )
+                elif best_fp is not None and FALL_POSE_CONTAINMENT_FALLBACK:
+                    # Fallback: IoU too low but check if FallGuard bbox center
+                    # is inside the generic bbox — same person, just very
+                    # different bbox shape (common when lying flat / prone).
+                    fxc = (best_fp['bbox'][0] + best_fp['bbox'][2]) / 2.0
+                    fyc = (best_fp['bbox'][1] + best_fp['bbox'][3]) / 2.0
+                    if px1 <= fxc <= px2 and py1 <= fyc <= py2:
+                        person['posture_class'] = best_fp.get('posture_class')
+                        person['posture_conf'] = best_fp.get('posture_conf', 0.0)
+                        matched = True
+                        logger.info(
+                            "IoU LOW (%.3f < %.1f) but center-containment matched → "
+                            "applying posture=%s conf=%.2f  "
+                            "generic_bbox=[%.0f,%.0f,%.0f,%.0f] fg_bbox=[%.0f,%.0f,%.0f,%.0f]",
+                            best_iou, FALL_POSE_IOU_THRESH,
+                            best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                            px1, py1, px2, py2, *best_fp['bbox'],
+                        )
+                    else:
+                        logger.warning(
+                            "IoU LOW (%.3f < %.1f) AND center NOT contained → "
+                            "posture_class DROPPED for generic_bbox=[%.0f,%.0f,%.0f,%.0f] "
+                            "fg_bbox=[%.0f,%.0f,%.0f,%.0f] fg_posture=%s fg_conf=%.2f",
+                            best_iou, FALL_POSE_IOU_THRESH,
+                            px1, py1, px2, py2, *best_fp['bbox'],
+                            best_fp.get('posture_class'), best_fp.get('posture_conf', 0.0),
+                        )
+                elif best_fp is not None:
+                    logger.warning(
+                        "IoU LOW (%.3f < %.1f), containment fallback DISABLED → "
+                        "posture_class DROPPED for generic_bbox=[%.0f,%.0f,%.0f,%.0f] "
+                        "fg_bbox=[%.0f,%.0f,%.0f,%.0f] fg_posture=%s",
+                        best_iou, FALL_POSE_IOU_THRESH,
+                        px1, py1, px2, py2, *best_fp['bbox'],
+                        best_fp.get('posture_class'),
+                    )
+        except Exception as e:
+            logger.error('fall-pose overlay error (continuing without posture): %s', e)
+
+    return people
+
 
 
 def _detect_objects(frame):
@@ -314,9 +504,9 @@ def _detect_objects(frame):
 
 @app.post('/detect_all')
 async def detect_all(image: UploadFile = File(...)):
-    """Detect people (pose model, w/ keypoints) and objects (general
-    COCO model) — returns both. See module docstring for the fix
-    rationale (previously `objects` was always empty)."""
+    """Detect people (pose model, w/ keypoints, + optional posture_class
+    from the custom fall-pose model) and objects (general COCO model) —
+    returns both. See module docstring for the fix rationale."""
     data = await image.read()
     arr = np.frombuffer(data, np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -388,6 +578,172 @@ async def list_hand_snapshots(limit: int = 10):
 
     return {"snapshots": snapshots, "total": len(snapshots)}
 
+@app.get('/api/incidents/latest')
+async def get_latest_incident():
+    """Retrieve the most recent incident with snapshotUrl from MongoDB Atlas."""
+    try:
+        import database as db
+        col = db._get_db()[db.INCIDENTS_COLLECTION]
+        doc = col.find_one({}, sort=[("createdAt", -1)])
+        if not doc:
+            doc = col.find_one({}, sort=[("_id", -1)])
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            return {"status": "ok", "incident": doc}
+        return {"status": "empty", "incident": None}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ─── Camera Frame Grab & Zone Management Endpoints ───────────────────────────
+
+@app.get('/api/camera/{cam_id}/frame')
+async def get_camera_frame(cam_id: str, source: Optional[str] = None):
+    """Grab a single fresh JPEG frame from camera cam_id for boundary drawing.
+
+    source can be passed directly as a query param (e.g. ?source=rtsp://...),
+    or cam_id will be resolved from sources.yaml, MongoDB cctv_cameras, or local file.
+    """
+    input_source = source
+    if not input_source:
+        # 1. Check sources.yaml
+        sources_path = ROOT / "config" / "sources.yaml"
+        if sources_path.exists():
+            try:
+                s_data = yaml.safe_load(sources_path.read_text(encoding="utf-8")) or {}
+                for s in s_data.get("sources", []):
+                    if str(s.get("id")) == cam_id or str(s.get("code")) == cam_id:
+                        input_source = s.get("path")
+                        break
+            except Exception:
+                pass
+
+        # 2. Check MongoDB cctv_cameras
+        if not input_source:
+            try:
+                from config.env_manager import init_env
+                init_env(require_edit=False)
+                import database as db
+                database = db._get_db()
+                cam = database["cctv_cameras"].find_one({
+                    "$or": [
+                        {"code": cam_id},
+                        {"id": cam_id},
+                        {"name": cam_id},
+                        {"position_note": cam_id}
+                    ]
+                })
+                if cam:
+                    input_source = (
+                        cam.get("rtsp_url") or
+                        cam.get("stream_url") or
+                        cam.get("path") or
+                        cam.get("source")
+                    )
+            except Exception as e:
+                logger.debug(f"[get_camera_frame] MongoDB lookup failed: {e}")
+
+        # 3. Fallback: check if cam_id itself is a file or stream
+        if not input_source and (Path(cam_id).exists() or cam_id.startswith("http") or cam_id.startswith("rtsp")):
+            input_source = cam_id
+
+    if not input_source:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No video source found for camera '{cam_id}'. Pass ?source=<rtsp_or_path>"
+        )
+
+    cap = cv2.VideoCapture(input_source)
+    if not cap.isOpened():
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to open video source for '{cam_id}': {input_source}"
+        )
+
+    ret, frame = cap.read()
+    cap.release()
+
+    if not ret or frame is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read frame from '{cam_id}'"
+        )
+
+    success, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to encode frame to JPEG")
+
+    return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@app.get('/api/camera/{cam_id}/zones')
+async def get_camera_zones(cam_id: str):
+    """Retrieve active boundary zones for camera cam_id."""
+    from pipeline import get_zone_manager
+    zm = get_zone_manager(cam_id)
+    if zm and zm.zones:
+        return {"cam_id": cam_id, "zones": zm.zones, "source": "memory"}
+
+    try:
+        from config.env_manager import init_env
+        init_env(require_edit=False)
+        import database as db
+        db_zones = db.get_camera_zones(cam_id)
+        if db_zones:
+            return {"cam_id": cam_id, "zones": db_zones, "source": "mongodb"}
+    except Exception:
+        pass
+
+    zones_path = ROOT / "config" / "zones.yaml"
+    if zones_path.exists():
+        try:
+            d = yaml.safe_load(zones_path.read_text(encoding="utf-8")) or {}
+            cams = d.get("cameras", {})
+            cfg = cams.get(cam_id) or cams.get("default")
+            if cfg and "zones" in cfg:
+                return {"cam_id": cam_id, "zones": cfg["zones"], "source": "yaml"}
+        except Exception:
+            pass
+
+    return {"cam_id": cam_id, "zones": [], "source": "none"}
+
+
+@app.post('/api/camera/{cam_id}/zones')
+async def save_camera_zones(cam_id: str, payload: Any = Body(...)):
+    """Save zones for camera cam_id to MongoDB and hot-reload in-memory ZoneManager."""
+    zones = None
+    if isinstance(payload, dict):
+        zones = payload.get("zones")
+    elif isinstance(payload, list):
+        zones = payload
+
+    if zones is None:
+        raise HTTPException(status_code=400, detail="Missing 'zones' array in request body")
+
+    # Persist to MongoDB
+    saved_in_db = False
+    try:
+        from config.env_manager import init_env
+        init_env(require_edit=False)
+        import database as db
+        saved_in_db = db.update_camera_zones(cam_id, zones)
+    except Exception as e:
+        logger.error(f"[save_camera_zones] DB save failed: {e}")
+
+    # Hot-reload in-memory if pipeline is running for this camera
+    from pipeline import get_zone_manager
+    zm = get_zone_manager(cam_id)
+    if zm:
+        zm.reload_zones(zones)
+
+    return {
+        "status": "ok",
+        "cam_id": cam_id,
+        "zones_count": len(zones),
+        "zones_saved": len(zones),
+        "saved_in_db": saved_in_db,
+        "hot_reloaded": zm is not None
+    }
+
 if __name__=='__main__':
-    # const port at 8000
+    # port8000
     uvicorn.run(app, host='127.0.0.1', port=8000, log_level='info')

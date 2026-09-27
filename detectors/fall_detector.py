@@ -29,8 +29,10 @@ class FallDetector:
       1. Geometry  — bbox ratio + spine angle detect horizontal posture
       2. Motion    — downward velocity spike OR sustained low motion
       3. is_down   — geometry AND (spike OR low_motion) OR strong_geometry_fallback
+                     OR model_lying (NEW — custom laying/standing classifier, if provided)
       4. Ground    — sustained detect_ground → ground_time confirmed
       5. Confirm   — ground_time ≥ confirm_s OR geometry_fallen (3 s shortcut)
+                     OR model_lying_fallen (NEW — model-confirm shortcut)
       6. Suppress  — recovered_quickly (nap/trip < recover_s) blocks is_fallen
 
     Config keys (all read from thresholds.yaml fall: section):
@@ -49,6 +51,25 @@ class FallDetector:
       geometry_confirm_seconds 3.0   strong geometry sustained → is_fallen shortcut
       danger_lying_seconds    15.0   lying ≥ this → danger_lying flag
       recover_seconds         5.0    lying < this then recovered → trip, no alert
+
+      # ── NEW: last-known-angle memory (fixes "angle defaults to 90°
+      #    when keypoints are missing" silently disabling angle path) ──
+      angle_memory_seconds     2.0    reuse last CONFIDENT spine angle for
+                                       up to this many seconds when pose
+                                       keypoints drop below confidence
+                                       (occlusion / prone / bad camera angle)
+
+      # ── NEW: optional custom laying/standing classifier shortcut.
+      #    Pairs with a fine-tuned pose model (see FallGuard notebook)
+      #    that outputs a direct laying/standing class per detection,
+      #    fed in via process(..., posture_class=, posture_conf=). This
+      #    bypasses geometry/angle math entirely when the model is
+      #    confident — useful because the generic COCO pose model's
+      #    confidence (and keypoint visibility) often degrades for
+      #    people lying flat, which otherwise starves the whole
+      #    pipeline of a signal to work with. ──
+      min_model_conf           0.5    min posture_conf to trust model signal
+      model_confirm_seconds    2.0    model says "laying" sustained ≥ this → is_fallen shortcut
     """
 
     def __init__(self, cfg: dict):
@@ -68,6 +89,11 @@ class FallDetector:
         self.danger_lying_s        = cfg.get("danger_lying_seconds",   15.0)
         self.recover_s             = cfg.get("recover_seconds",         5.0)
 
+        # NEW
+        self.angle_memory_s        = cfg.get("angle_memory_seconds",    2.0)
+        self.min_model_conf        = cfg.get("min_model_conf",          0.5)
+        self.model_confirm_s       = cfg.get("model_confirm_seconds",   2.0)
+
         # --- per-track state dicts ---
         self._since            = {}   # when is_down first started
         self._hist             = {}   # deque of (timestamp, centroid_y)
@@ -78,6 +104,15 @@ class FallDetector:
         self._ground_candidate = {}   # first detect_ground timestamp (waiting sustain)
         self._lying_geom_since = {}   # when strong geometry first persisted
         self._recovered_short  = {}   # timestamp of quick recovery (trip suppression)
+
+        # NEW: last confidently-measured spine angle per track, so a
+        # frame with missing/low-confidence keypoints doesn't silently
+        # fall back to "90° = standing" and disable the angle signal.
+        self._last_angle       = {}   # tid -> angle (deg)
+        self._last_angle_time  = {}   # tid -> timestamp of that measurement
+
+        # NEW: custom laying/standing model shortcut bookkeeping
+        self._model_lying_since = {}  # tid -> timestamp model first said "laying" (sustained)
 
     # ------------------------------------------------------------------
     # FIX 4: cleanup_track — call from main.py when tracker drops a tid.
@@ -101,6 +136,9 @@ class FallDetector:
             self._ground_candidate,
             self._lying_geom_since,
             self._recovered_short,
+            self._last_angle,
+            self._last_angle_time,
+            self._model_lying_since,
         ):
             d.pop(tid, None)
         logger.debug("cleanup_track: cleared state for tid=%s", tid)
@@ -150,34 +188,130 @@ class FallDetector:
     # Main processing entry point
     # ------------------------------------------------------------------
 
-    def process(self, tid: int, kps, bbox, h: int, w: int, timestamp: float = None) -> dict:
+    def _is_sitting(self, kps, bbox) -> bool:
+        """Return True if the person is sitting upright in a chair/sofa/desk (not lying on the ground).
+
+        Key characteristics of sitting:
+          - Bounding box ratio W/H < 1.45 (not a wide flat body lying horizontally on the ground)
+          - Shoulders are clearly above hips: Y_shoulder <= Y_hip - 0.10 * box_h
+          - Head is above shoulders (if head keypoints visible)
+          - Hips are above or level with knees: Y_hip <= Y_knee + 0.08 * box_h
+          - Knees are above or level with ankles: Y_knee <= Y_ankle + 0.08 * box_h
+        """
+        x1, y1, x2, y2 = bbox
+        box_w = max(1.0, x2 - x1)
+        box_h = max(1.0, y2 - y1)
+        ratio = box_w / box_h
+        if ratio >= 1.45:
+            return False
+
+        ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
+        lh, rh = _kp(kps, L_HIP),      _kp(kps, R_HIP)
+        lk, rk = _kp(kps, L_KNEE),     _kp(kps, R_KNEE)
+        la, ra = _kp(kps, L_ANKLE),    _kp(kps, R_ANKLE)
+
+        sh_pts = [p for p in (ls, rs) if _vis(p, 0.25)]
+        hip_pts = [p for p in (lh, rh) if _vis(p, 0.25)]
+        knee_ys = [p[1] for p in (lk, rk) if _vis(p, 0.25)]
+        ank_ys = [p[1] for p in (la, ra) if _vis(p, 0.25)]
+
+        if sh_pts and hip_pts:
+            avg_sh_y = sum(p[1] for p in sh_pts) / len(sh_pts)
+            avg_hip_y = sum(p[1] for p in hip_pts) / len(hip_pts)
+            torso_dy = avg_hip_y - avg_sh_y
+            if torso_dy < 0.10 * box_h:
+                return False
+
+            # Torso upright check: A sitting person has an upright torso (vertical).
+            # From elevated cameras, people lying horizontally on the ground can have hip_y > sh_y,
+            # but their horizontal span dx will be significantly larger than dy (spine is horizontal).
+            avg_sh_x = sum(p[0] for p in sh_pts) / len(sh_pts)
+            avg_hip_x = sum(p[0] for p in hip_pts) / len(hip_pts)
+            torso_dx = abs(avg_hip_x - avg_sh_x)
+            if ratio >= 0.85 and torso_dy < 1.0 * torso_dx:
+                return False
+
+            # Check head if visible (head must be above shoulders)
+            head_pts = [_kp(kps, i) for i in (0, 1, 2, 3, 4)]
+            head_ys = [p[1] for p in head_pts if _vis(p, 0.25)]
+            if head_ys:
+                avg_head_y = sum(head_ys) / len(head_ys)
+                if avg_head_y > avg_sh_y + 0.05 * box_h:
+                    return False
+
+            if knee_ys:
+                avg_knee_y = sum(knee_ys) / len(knee_ys)
+                if avg_knee_y < avg_hip_y - 0.08 * box_h:
+                    return False
+
+                if ank_ys:
+                    avg_ank_y = sum(ank_ys) / len(ank_ys)
+                    if avg_ank_y < avg_knee_y - 0.08 * box_h:
+                        return False
+
+            return True
+
+        return False
+
+    def process(self, tid: int, kps, bbox, h: int, w: int,
+                posture_class=None, posture_conf: float = 0.0,
+                timestamp: float = None) -> dict:
         """Process one detection for track `tid` and return a result dict.
 
         Parameters
         ----------
-        tid       : track ID (int)
-        kps       : keypoints array, shape (N, 3) — [x, y, confidence]
-        bbox      : [x1, y1, x2, y2] in pixels
-        h, w      : frame height and width in pixels
-        timestamp : video time in seconds (optional). If None, uses time.time().
-                    Pass video timestamp when processing pre-recorded video to
-                    avoid wall-clock timing issues at faster-than-realtime speed.
+        tid  : track ID (int)
+        kps  : keypoints array, shape (N, 3) — [x, y, confidence]
+        bbox : [x1, y1, x2, y2] in pixels
+        h, w : frame height and width in pixels
+        posture_class : optional str/int — "laying"/"standing" or 0/1, from
+                        an optional custom laying/standing classifier model
+                        (e.g. the FallGuard fine-tuned pose model). Pass
+                        None if not available — everything still works via
+                        geometry/motion as before.
+        posture_conf  : confidence for posture_class (0.0 if not available)
+        timestamp     : optional float (video seconds for evaluation / playback;
+                        defaults to time.time() for live stream)
         """
+        now = timestamp if timestamp is not None else time.time()
         x1, y1, x2, y2 = bbox
         ratio = (x2 - x1) / ((y2 - y1) + 1e-6)
 
         # ── Spine angle (shoulder-midpoint → hip-midpoint) ──
         ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
         lh, rh = _kp(kps, L_HIP),     _kp(kps, R_HIP)
-        angle = 90.0
         has_pose = _vis(ls) and _vis(rs) and _vis(lh) and _vis(rh)
+
+        # ════════════════════════════════════════════════════════════════
+        # FIX (angle default bug): previously `angle` fell back to a
+        # hard-coded 90.0 (= perfectly upright) whenever any of the 4
+        # torso keypoints dropped below confidence — which happens a lot
+        # for a person lying flat / face-down / partially occluded. That
+        # silently disabled the "angle < angle_thresh" signal exactly
+        # when it mattered most, leaving detection to rely on bbox_ratio
+        # alone. Now: if pose is confidently visible this frame, measure
+        # and remember it. If not, reuse the last CONFIDENT angle for up
+        # to `angle_memory_seconds` (a person doesn't recover from lying
+        # to standing in under ~2s without a pose read succeeding at
+        # least once during that time) instead of assuming "standing".
+        # Only after the memory window expires with no fresh read do we
+        # fall back to the old neutral 90.0 default.
+        # ════════════════════════════════════════════════════════════════
         if has_pose:
             sh = np.array([(ls[0] + rs[0]) / 2, (ls[1] + rs[1]) / 2])
             hp = np.array([(lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2])
             d  = sh - hp
             angle = abs(np.degrees(np.arctan2(abs(d[1]), abs(d[0]) + 1e-6)))
+            self._last_angle[tid] = angle
+            self._last_angle_time[tid] = now
+        else:
+            last_a    = self._last_angle.get(tid)
+            last_a_ts = self._last_angle_time.get(tid)
+            if last_a is not None and last_a_ts is not None and (now - last_a_ts) <= self.angle_memory_s:
+                angle = last_a  # reuse recent confident reading
+            else:
+                angle = 90.0     # no recent info at all — neutral default (old behavior)
 
-        now = timestamp if timestamp is not None else time.time()
         cx  = (x1 + x2) / 2.0
         cy  = (y1 + y2) / 2.0
         h_pixels = float(h) if h else 1.0
@@ -191,17 +325,11 @@ class FallDetector:
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 1 — Geometry signals
-        #
-        # FIX 5: Sitting suppression — if torso is upright (angle > 70°)
-        # but bbox ratio is wide, the person is likely sitting, not fallen.
-        # Original: `ratio > thresh OR angle < thresh` → triggers on
-        # sitting with wide bbox. Now: suppress is_down_basic when spine
-        # is clearly upright (> 70°), even if bbox ratio is wide.
         # ════════════════════════════════════════════════════════════════
-        sitting_upright = has_pose and angle > 70.0
-        if sitting_upright:
-            # Only geometry angle can trigger — bbox ratio alone is not enough
-            is_down_basic = angle < self.angle_thresh
+        if has_pose:
+            # When torso keypoints are visible, an upright person (angle >= angle_thresh)
+            # is NOT down unless the bounding box is strongly horizontal.
+            is_down_basic = (angle < self.angle_thresh) or (ratio >= self.geometry_ratio_thresh)
         else:
             is_down_basic = ratio > self.bbox_thresh or angle < self.angle_thresh
 
@@ -220,6 +348,30 @@ class FallDetector:
         geometry_time  = (now - geom_start) if geom_start else 0.0
         geometry_down   = strong_lying_geometry and geometry_time >= self.sustain_s
         geometry_fallen = strong_lying_geometry and geometry_time >= self.geometry_confirm_s
+
+        # ════════════════════════════════════════════════════════════════
+        # STAGE 1b — NEW: custom laying/standing model signal
+        #
+        # If an optional fine-tuned classifier (posture_class/posture_conf)
+        # is supplied, treat a confident "laying" call as a strong,
+        # geometry-independent signal — this is the whole point of
+        # training such a model: it doesn't need clean keypoints to work,
+        # so it catches cases where pose estimation itself is degraded
+        # (prone posture, occlusion, odd camera angle) and the geometry
+        # path above has nothing reliable to go on.
+        # ════════════════════════════════════════════════════════════════
+        is_laying_label = str(posture_class).lower() in ("laying", "lying", "0")
+        model_confident_lying = bool(
+            posture_class is not None and is_laying_label and posture_conf >= self.min_model_conf
+        )
+        if model_confident_lying:
+            self._model_lying_since.setdefault(tid, now)
+        else:
+            self._model_lying_since.pop(tid, None)
+
+        model_lying_start  = self._model_lying_since.get(tid)
+        model_lying_time   = (now - model_lying_start) if model_lying_start else 0.0
+        model_lying_fallen = model_confident_lying and model_lying_time >= self.model_confirm_s
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 2 — Motion signals
@@ -248,7 +400,22 @@ class FallDetector:
             (is_down_basic and (detect_spike or low_motion))
             or geometry_down
             or slow_fall_fallback   # FIX 2
+            or model_confident_lying  # NEW: model says laying → count as down
         )
+
+        # ── Debug logging: per-track signal breakdown ──
+        if is_down:
+            logger.debug(
+                "tid=%s IS_DOWN: ratio=%.2f angle=%.1f has_pose=%s "
+                "spike=%s low_motion=%s geom_down=%s geom_time=%.1f "
+                "slow_fb=%s model_lying=%s model_time=%.1f "
+                "stale_angle=%s posture=%s posture_conf=%.2f",
+                tid, ratio, angle, has_pose,
+                detect_spike, low_motion, geometry_down, geometry_time,
+                slow_fall_fallback, model_confident_lying, model_lying_time,
+                (not has_pose and angle != 90.0),
+                posture_class, posture_conf,
+            )
 
         # ── Spike bookkeeping ──
         if detect_spike:
@@ -284,7 +451,9 @@ class FallDetector:
                 self._stand_height[tid] = current_max
 
         stand_h = self._stand_height.get(tid)
-        detect_lying_height = bool(stand_h and bbox_h_norm < stand_h * 0.6)
+        detect_lying_height = bool(
+            stand_h and bbox_h_norm < stand_h * 0.6 and (ratio > 0.85 or angle < self.lying_angle_thresh)
+        )
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 5 — Ground contact detection
@@ -293,7 +462,20 @@ class FallDetector:
             (low_motion and (ratio > self.bbox_thresh or (has_pose and angle < self.lying_angle_thresh)))
             or detect_lying_height
             or geometry_down
+            or model_confident_lying   # NEW
         )
+
+        # ── Sitting Posture Check (Chair / Sofa) ──
+        # A person sitting upright is NOT a fall. Suppress ground and down states.
+        is_sitting = self._is_sitting(kps, bbox)
+        if is_sitting:
+            is_down = False
+            detect_ground = False
+            self._ground_candidate.pop(tid, None)
+            self._ground_time.pop(tid, None)
+            self._since.pop(tid, None)
+            self._lying_geom_since.pop(tid, None)
+            self._spike_time.pop(tid, None)
 
         if detect_ground:
             self._ground_candidate.setdefault(tid, now)
@@ -332,6 +514,11 @@ class FallDetector:
             self._ground_time[tid] = geom_start
             ground_t = geom_start
 
+        # ── NEW: model path can set ground_time independently too ──
+        if model_lying_fallen and model_lying_start is not None and ground_t is None:
+            self._ground_time[tid] = model_lying_start
+            ground_t = model_lying_start
+
         # ════════════════════════════════════════════════════════════════
         # STAGE 6 — Timing derivations
         # ════════════════════════════════════════════════════════════════
@@ -354,7 +541,8 @@ class FallDetector:
         #         The yaml value overrides this, but the in-code default
         #         is now correct.  A confirmed fall requires either:
         #           (a) ground contact sustained ≥ confirm_s seconds, OR
-        #           (b) geometry_fallen (strong posture ≥ geometry_confirm_s).
+        #           (b) geometry_fallen (strong posture ≥ geometry_confirm_s), OR
+        #           (c) model_lying_fallen (NEW — custom classifier ≥ model_confirm_s)
         #         Quick recoveries (trip/stumble) suppress the flag.
         # ════════════════════════════════════════════════════════════════
         if ground_t:
@@ -364,6 +552,22 @@ class FallDetector:
 
         if geometry_fallen:
             is_fallen = True  # geometry shortcut (3 s of clear lying posture)
+            logger.info(
+                "tid=%s GEOMETRY SHORTCUT fired: geom_time=%.1f ratio=%.2f angle=%.1f",
+                tid, geometry_time, ratio, angle,
+            )
+
+        if model_lying_fallen:
+            is_fallen = True  # NEW: model shortcut (2 s of confident "laying" classification)
+            logger.info(
+                "tid=%s MODEL SHORTCUT fired: model_time=%.1f posture=%s conf=%.2f",
+                tid, model_lying_time, posture_class, posture_conf,
+            )
+
+        # Sitting person is never fallen
+        if is_sitting:
+            is_fallen = False
+            danger_lying = False
 
         # ── Trip / quick-recovery suppression ──
         recovered_quickly = False
@@ -389,6 +593,7 @@ class FallDetector:
         return {
             "is_fallen":             bool(is_fallen),
             "is_down":               bool(is_down),
+            "is_sitting":            bool(is_sitting),
             "time_down":             round(time_down_val, 1),
             "bbox_ratio":            round(ratio, 2),
             "spine_angle":           round(angle, 1),
@@ -406,6 +611,9 @@ class FallDetector:
             "strong_lying_geometry": bool(strong_lying_geometry),
             "geometry_time":         round(geometry_time, 1),
             "slow_fall_fallback":    bool(slow_fall_fallback),   # debug signal
+            "used_stale_angle":      bool(not has_pose and angle != 90.0),  # NEW debug signal
+            "model_confident_lying": bool(model_confident_lying),           # NEW debug signal
+            "model_lying_time":      round(model_lying_time, 1),            # NEW debug signal
         }
 
     # ------------------------------------------------------------------
@@ -434,6 +642,10 @@ class FallDetector:
             label = f"DOWN {res['time_down']}s"
             if res.get("slow_fall_fallback"):
                 label += " [slow]"
+            if res.get("used_stale_angle"):
+                label += " [mem]"
+            if res.get("model_confident_lying"):
+                label += " [model]"
             cv2.putText(
                 frame, label,
                 (x1, y2 + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, c, 2,

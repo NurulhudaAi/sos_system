@@ -16,6 +16,7 @@ elapsed แทบไม่มีทางไต่ถึง left_behind_seconds/
 แม้ bbox จะสั่นไปมาบ้างในแต่ละเฟรม
 """
 import cv2
+import os
 import time
 import logging
 from pathlib import Path
@@ -100,6 +101,14 @@ class ObjectGuardian:
     # ─── Snapshot ────────────────────────────────────────────────────────────
 
     def _save_snapshot(self, frame, label: str) -> Optional[str]:
+        save_local = os.getenv("SAVE_LOCAL_SNAPSHOTS", "false").lower() == "true"
+        if not save_local:
+            try:
+                from utils import frame_to_base64
+                return frame_to_base64(frame)
+            except Exception as e:
+                logger.error(f"Base64 snapshot error: {e}")
+                return None
         try:
             ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             path = self.alert_dir / f"{label}_{ts}.jpg"
