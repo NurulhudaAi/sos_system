@@ -60,7 +60,7 @@ general:
   frame_skip: 1
   person_conf: 0.20
   fall_pose_conf: 0.20
-  yolo_model: "models/yolov8n-pose.pt"
+  yolo_model: "models/yolov8m-pose.pt"
   fall_pose_model: "../models/FallGuard_YOLOv8Pose.pt" 
   fall_pose_class_map:
     0: laying

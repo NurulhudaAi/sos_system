@@ -83,7 +83,9 @@ ROOT = Path(__file__).resolve().parent
 SNAPSHOT_ROOT = ROOT / "logs" / "snapshots"
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 GENERAL = cfg.get('general', {})
-YOLO_MODEL = GENERAL.get('yolo_model', '../models/yolov8n-pose.pt')
+_yolo_model_str = GENERAL.get('yolo_model', 'models/yolov8m-pose.pt')
+_p = ROOT / _yolo_model_str if not Path(_yolo_model_str).is_absolute() else Path(_yolo_model_str)
+YOLO_MODEL = str(_p) if _p.exists() else _yolo_model_str
 PERSON_CONF = GENERAL.get('person_conf', 0.30)
 
 # [FIX] Separate general-object detection model config

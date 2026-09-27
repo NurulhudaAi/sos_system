@@ -61,7 +61,6 @@ from pipeline                    import CooldownEngine, ZoneManager, AlertDispat
 from help_request_dispatcher     import HelpRequestDispatcher
 from utils                       import preprocess, Visualizer, add_sos_badge, create_bbox_snapshot_base64
 from vlc_stream                  import VLCStreamManager
-from alert_logger                import alert_logger
 import database as db_module
 from database                    import insert_incident, insert_object_event  # [W6] ลบ _get_db ที่ไม่ใช้
 
@@ -509,7 +508,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         (fr.get("bbox_ratio") is not None and float(fr.get("bbox_ratio")) > 1.2)
                     )
                     recently_fallen = (now_t - _fall_last_event_ts.get(tid, -1e9)) < 25.0
-                    is_moving_fast = vel_px_s > 40.0
+                    # Suppress if moving rapidly (running > 0.45 frame_h/s, not normal stepping/gesturing)
+                    is_moving_fast = (vel_px_s / max(1.0, float(h))) > 0.45
 
                     # Suppress Hand SOS if both arms are overhead (Pose SOS), fallen, lying, or moving fast
                     if both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:

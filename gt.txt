@@ -1,7 +1,0 @@
-24:fall
-45:fall
-53:fall
-88:fall
-91:hand_sos
-152:fall
-156:hand_sos

@@ -165,7 +165,12 @@ def load_cfg():
 def build_models(cfg):
     from ultralytics import YOLO
     general = cfg.get("general", {})
-    yolo_path = ROOT / "models" / "yolov8n-pose.pt"
+    model_name = general.get("yolo_model", "models/yolov8m-pose.pt")
+    yolo_path = ROOT / model_name if not Path(model_name).is_absolute() else Path(model_name)
+    if not yolo_path.exists():
+        yolo_path = ROOT / "models" / "yolov8m-pose.pt"
+    if not yolo_path.exists():
+        yolo_path = ROOT / "models" / "yolov8n-pose.pt"
     fg_path = ROOT / "models" / "FallGuard_YOLOv8Pose.pt"
 
     print(f"Loading generic pose model: {yolo_path}")
@@ -416,7 +421,8 @@ def evaluate_video(video_path: Path, yolo, yolo_fg, cfg, max_seconds=None):
             both_overhead = _are_both_arms_over_head(kp)
             is_lying = (posture_class == "laying") or (fr.get("spine_angle", 90.0) < 40.0) or (fr.get("bbox_ratio", 0.0) > 1.2)
             recently_fallen = (ts_sec - last_fall_event.get(tid, -1e9)) < 25.0
-            is_moving_fast = vel_px_s > 40.0
+            # Suppress if moving rapidly (running > 0.45 frame_h/s, not normal stepping/gesturing)
+            is_moving_fast = (vel_px_s / max(1.0, float(h))) > 0.45
             if both_overhead or fall_ev.get(tid, False) or is_lying or recently_fallen or is_moving_fast:
                 hand_states[tid] = 0
                 hand_consec3[tid] = 0
