@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List
 from pathlib import Path
+import base64
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 try:
     from dotenv import load_dotenv
@@ -506,6 +508,105 @@ def get_camera_zones(cam_id: str) -> list:
     except Exception as e:
         logger.debug(f"get_camera_zones error for {cam_id}: {e}")
     return []
+
+
+# ─── RTSP Crypto & Active Cameras Management ─────────────────────────────────
+
+def decrypt_rtsp_url(encrypted_b64: str, iv_b64: str, secret_hex: Optional[str] = None) -> str:
+    """Decrypt an AES-256-GCM encrypted RTSP URL from MongoDB."""
+    if not encrypted_b64 or not iv_b64:
+        return ""
+    try:
+        secret = secret_hex or os.getenv("RTSP_SECRET", "")
+        if not secret:
+            logger.error("[decrypt_rtsp_url] RTSP_SECRET is not configured in environment")
+            return ""
+        key = bytes.fromhex(secret.strip())
+        iv = base64.b64decode(iv_b64.strip())
+        ciphertext_with_tag = base64.b64decode(encrypted_b64.strip())
+        aesgcm = AESGCM(key)
+        decrypted = aesgcm.decrypt(iv, ciphertext_with_tag, None)
+        return decrypted.decode("utf-8")
+    except Exception as e:
+        logger.error(f"[decrypt_rtsp_url] Decryption failed: {e}")
+        return ""
+
+
+def get_active_cameras() -> List[Dict[str, Any]]:
+    """Retrieve all cameras configured to be active from MongoDB cctv_cameras.
+
+    Decrypts their RTSP URL in-memory and returns a list of source dicts ready for pipeline.
+    """
+    cameras = []
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        # Match cameras where active is True or status indicates active
+        query = {
+            "$or": [
+                {"active": True},
+                {"status": {"$in": ["Active", "online"]}}
+            ]
+        }
+        for doc in col.find(query):
+            cam_code = doc.get("code") or str(doc.get("_id"))
+            name = doc.get("name", cam_code)
+            location = doc.get("position_note") or name
+
+            rtsp_url = ""
+            if doc.get("rtsp_url_encrypted") and doc.get("rtsp_iv"):
+                rtsp_url = decrypt_rtsp_url(doc["rtsp_url_encrypted"], doc["rtsp_iv"])
+            elif doc.get("rtsp_url"):
+                rtsp_url = doc.get("rtsp_url")
+
+            zones = doc.get("zones", [])
+            cameras.append({
+                "id": cam_code,
+                "code": cam_code,
+                "name": name,
+                "location": location,
+                "path": rtsp_url,
+                "rtsp_url": rtsp_url,
+                "zones": zones,
+                "enabled": True,
+            })
+        logger.info(f"Loaded {len(cameras)} active camera(s) from MongoDB cctv_cameras")
+    except Exception as e:
+        logger.error(f"Failed to fetch active cameras from DB: {e}")
+    return cameras
+
+
+def update_camera_status(cam_id: str, status: str, error_msg: Optional[str] = None) -> bool:
+    """Update camera running status in MongoDB cctv_cameras (e.g. 'online', 'offline', 'error')."""
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        update_data: Dict[str, Any] = {
+            "status": status,
+            "updated_at": _utcnow()
+        }
+        if status == "online":
+            update_data["rtsp_verified_at"] = _utcnow()
+        if error_msg:
+            update_data["retry_state.closed_reason"] = error_msg
+            update_data["retry_state.last_attempt_at"] = _utcnow()
+
+        res = col.update_one(
+            {
+                "$or": [
+                    {"code": cam_id},
+                    {"id": cam_id},
+                    {"name": cam_id},
+                    {"position_note": cam_id}
+                ]
+            },
+            {"$set": update_data}
+        )
+        return bool(res.matched_count > 0)
+    except Exception as e:
+        logger.error(f"Failed to update camera status for {cam_id}: {e}")
+        return False
+
 
 
 # ─── Health check ─────────────────────────────────────────────────────────────

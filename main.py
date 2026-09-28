@@ -783,10 +783,28 @@ if __name__=="__main__":
     parser.add_argument("--port", "-p", type=int, default=8081, help="Streaming port (base)")
     parser.add_argument("--use-vlc", action="store_true", help="Force transcoding via VLC HTTP stream")
     parser.add_argument("--loop", action="store_true", help="Loop video file continuously")
+    parser.add_argument("--from-db", action="store_true", help="Load active cameras dynamically from MongoDB Atlas (cctv_cameras)")
     args, unknown = parser.parse_known_args()
 
     sources = []
-    if args.source:
+    if args.from_db:
+        print("[main] 🔄 Fetching active cameras from MongoDB Atlas (cctv_cameras)...")
+        db_cams = db_module.get_active_cameras()
+        for i, c in enumerate(db_cams):
+            if not c.get("path"):
+                print(f"⚠️  Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
+                continue
+            sources.append({
+                "id": c.get("code") or f"cam_{i+1}",
+                "path": c["path"],
+                "location": c.get("location") or c.get("name", ""),
+                "port": args.port + i,
+                "use_vlc": args.use_vlc,
+                "loop": False,
+                "enabled": True,
+            })
+        print(f"[main] Loaded {len(sources)} active camera(s) from database.")
+    elif args.source:
         p = Path(args.source)
         loc = args.location or (p.stem if p.exists() else "stream")
         sources.append({
@@ -824,8 +842,9 @@ if __name__=="__main__":
         except Exception as e:
             print(f"⚠️ อ่าน config/sources.yaml ผิดพลาด: {e}")
     else:
-        print("❌ ไม่พบ config/sources.yaml และไม่มีการระบุ --source หรือ --dir")
+        print("❌ ไม่พบ config/sources.yaml และไม่มีการระบุ --source, --dir หรือ --from-db")
         print("\nตัวอย่างการใช้งาน:")
+        print("  python3 main.py --from-db")
         print("  python3 main.py --source 'rtsp://...'")
         print("  python3 main.py --source '/path/to/video.mp4'")
         print("  python3 main.py --dir '/path/to/videos_folder'")
