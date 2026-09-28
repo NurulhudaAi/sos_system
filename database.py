@@ -532,22 +532,28 @@ def decrypt_rtsp_url(encrypted_b64: str, iv_b64: str, secret_hex: Optional[str] 
         return ""
 
 
-def get_active_cameras() -> List[Dict[str, Any]]:
-    """Retrieve all cameras configured to be active from MongoDB cctv_cameras.
+def get_active_cameras(cam_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Retrieve cameras configured to be active from MongoDB cctv_cameras.
 
+    If cam_id is provided, retrieves that specific camera even if currently inactive (for testing).
     Decrypts their RTSP URL in-memory and returns a list of source dicts ready for pipeline.
     """
     cameras = []
     try:
         db = _get_db()
         col = db["cctv_cameras"]
-        # Match cameras where active is True or status indicates active
-        query = {
-            "$or": [
-                {"active": True},
-                {"status": {"$in": ["Active", "online"]}}
-            ]
-        }
+        if cam_id:
+            query = {
+                "$or": [
+                    {"code": cam_id},
+                    {"name": cam_id},
+                    {"position_note": cam_id}
+                ]
+            }
+        else:
+            # Active cameras only
+            query = {"active": True}
+
         for doc in col.find(query):
             cam_code = doc.get("code") or str(doc.get("_id"))
             name = doc.get("name", cam_code)
@@ -558,6 +564,11 @@ def get_active_cameras() -> List[Dict[str, Any]]:
                 rtsp_url = decrypt_rtsp_url(doc["rtsp_url_encrypted"], doc["rtsp_iv"])
             elif doc.get("rtsp_url"):
                 rtsp_url = doc.get("rtsp_url")
+
+            # Only include cameras with a valid stream path
+            if not rtsp_url:
+                logger.debug(f"[get_active_cameras] Skipped {cam_code}: no valid RTSP URL")
+                continue
 
             zones = doc.get("zones", [])
             cameras.append({
@@ -570,10 +581,11 @@ def get_active_cameras() -> List[Dict[str, Any]]:
                 "zones": zones,
                 "enabled": True,
             })
-        logger.info(f"Loaded {len(cameras)} active camera(s) from MongoDB cctv_cameras")
+        logger.info(f"Loaded {len(cameras)} camera(s) from MongoDB cctv_cameras (filter={cam_id!r})")
     except Exception as e:
-        logger.error(f"Failed to fetch active cameras from DB: {e}")
+        logger.error(f"Failed to fetch cameras from DB: {e}")
     return cameras
+
 
 
 def update_camera_status(cam_id: str, status: str, error_msg: Optional[str] = None) -> bool:

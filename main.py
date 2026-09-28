@@ -788,8 +788,10 @@ if __name__=="__main__":
 
     sources = []
     if args.from_db:
-        print("[main] 🔄 Fetching active cameras from MongoDB Atlas (cctv_cameras)...")
-        db_cams = db_module.get_active_cameras()
+        target_cam = args.cam_id if args.cam_id else None
+        target_msg = f"for cam_id={target_cam}" if target_cam else "(all active)"
+        print(f"[main] 🔄 Fetching cameras from MongoDB Atlas {target_msg}...")
+        db_cams = db_module.get_active_cameras(cam_id=target_cam)
         for i, c in enumerate(db_cams):
             if not c.get("path"):
                 print(f"⚠️  Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
