@@ -103,6 +103,9 @@ object_guardian:
   left_behind_seconds: 15
   min_confidence: 0.25
   theft_seconds: 8
+  theft_window_seconds: 8
+  ownership_confirm_seconds: 2.0
+  proximity_norm: 0.20
   track_iou_threshold: 0.15
   track_max_missed: 15
 record_only_dangerous: true 

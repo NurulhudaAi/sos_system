@@ -139,8 +139,15 @@ def evaluate_video(video_path: Path, label: dict, detector_url: str,
         people_raw = resp.get("people", [])
         objects_raw = resp.get("objects", [])
 
-        assigned = tracker.update([{"bbox": p["bbox"]} for p in people_raw])
-        gp = [{"bbox": d["bbox"], "track_id": d["track_id"]} for d in assigned]
+        assigned = tracker.update(people_raw)
+        gp = [
+            {
+                "bbox": d["bbox"],
+                "track_id": d["track_id"],
+                "keypoints": d.get("keypoints", []),
+            }
+            for d in assigned
+        ]
 
         odets = [
             {

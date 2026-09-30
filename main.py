@@ -383,32 +383,6 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     n, n / max(1, SAMPLING_FPS),
                 )
 
-            # ── Object Guardian ──────────────────────────────────────────
-            gp=[{"bbox":d["bbox"],"track_id":i} for i,d in enumerate(pdets)]
-            for oa in obj_grd.update(frame,odets,gp,source_id=source_id,location=location):
-                obbox = oa.get("bbox") or [0, 0, 0, 0]
-                ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
-                if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
-                    continue
-                # [W5] ส่ง insert_object_event ให้ตรงกับ signature จริงใน database.py
-                try:
-                    insert_object_event(
-                        event_type         = oa.get("event_type", "object_event"),
-                        source_id          = source_id,
-                        location           = location,
-                        track_id           = oa.get("track_id"),
-                        class_name         = oa.get("class_name", ""),
-                        confidence         = float(oa.get("confidence", 0.0)),
-                        bbox               = oa.get("bbox"),
-                        image_path         = oa.get("image_path"),
-                        seconds_unattended = float(oa.get("seconds_unattended", 0.0)),
-                        alert_raised       = bool(oa.get("alert_raised", True)),
-                        meta               = oa,
-                    )
-                except Exception as e:
-                    print(f"[DB] object_event insert error: {e}")
-            obj_grd.draw(frame)
-
             # ── People tracking ──────────────────────────────────────────
             if pdets:
                 assigned=tracker.update(pdets)
@@ -424,7 +398,35 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     for d in assigned
                 ]
             else:
+                assigned=[]
                 boxes=None; kpts=None; posture_by_idx=[]
+
+            # ── Object Guardian ──────────────────────────────────────────
+            # [STEP 1-2] ส่ง assigned ที่มี track_id ถาวรและ keypoints สำหรับข้อมือ
+            for oa in obj_grd.update(frame, odets, assigned, source_id=source_id, location=location):
+                obbox = oa.get("bbox") or [0, 0, 0, 0]
+                ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
+                if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
+                    continue
+                # [W5] ส่ง insert_object_event ให้ตรงกับ signature จริงใน database.py
+                try:
+                    insert_object_event(
+                        event_type         = oa.get("event_type", "object_event"),
+                        source_id          = source_id,
+                        location           = location,
+                        track_id           = oa.get("track_id"),
+                        person_track_id    = oa.get("person_track_id") or oa.get("owner_track_id") or oa.get("suspect_track_id"),
+                        class_name         = oa.get("class_name", ""),
+                        confidence         = float(oa.get("confidence", 0.0)),
+                        bbox               = oa.get("bbox"),
+                        image_path         = oa.get("image_path"),
+                        seconds_unattended = float(oa.get("seconds_unattended", 0.0)),
+                        alert_raised       = bool(oa.get("alert_raised", True)),
+                        meta               = oa,
+                    )
+                except Exception as e:
+                    print(f"[DB] object_event insert error: {e}")
+            obj_grd.draw(frame)
 
             # [W2] cleanup tracks ที่หายไปจากเฟรม
             # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ที่เห็นในเฟรมปัจจุบันเฟรม

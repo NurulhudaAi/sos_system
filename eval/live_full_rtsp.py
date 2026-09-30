@@ -339,7 +339,7 @@ def run_live(rtsp_url, detector_url, obj_cfg, fall_cfg, hand_cfg,
                       f"(ลองแล้ว: {_KP_KEYS}) — FallDetector จะทำงานไม่ได้ผล")
                 run_live._kp_warned = True
 
-        gp = [{"bbox": d["bbox"], "track_id": d["track_id"]} for d in assigned]
+        gp = [{"bbox": d["bbox"], "track_id": d["track_id"], "keypoints": d.get("keypoints", [])} for d in assigned]
 
         # ── ObjectGuardian ──
         odets = [
