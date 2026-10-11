@@ -35,6 +35,24 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 logger = logging.getLogger("main")
 
+import ctypes, glob
+def silence_stream_noise():
+    """Silences noisy C-level FFmpeg decoders and MediaPipe warnings in the terminal."""
+    os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+    os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+    os.environ["GLOG_minloglevel"] = "2"
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+    try:
+        cv_dir = os.path.dirname(cv2.__file__)
+        dylibs = glob.glob(os.path.join(cv_dir, ".dylibs", "libavutil*.dylib"))
+        if dylibs:
+            avutil = ctypes.CDLL(dylibs[0])
+            avutil.av_log_set_level(-8)  # AV_LOG_QUIET
+    except Exception:
+        pass
+
+silence_stream_noise()
+
 # ──── Initialize environment (MUST BE FIRST) ────────────────────────────────
 from config.env_manager import init_env
 if not init_env(require_edit=False):
@@ -212,7 +230,7 @@ def _are_both_arms_over_head(kps, conf_thresh=0.25):
     return (float(l_wr[1]) <= head_ref + 15) and (float(r_wr[1]) <= head_ref + 15)
 
 
-def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=False, loop:bool=False):
+def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=False, loop:bool=False, signal_config:Optional[Dict[str, Any]]=None):
     hand_cfg = cfg.get("hand_sos", {})
     source_p = Path(src)
     is_file = source_p.is_file()
@@ -243,7 +261,13 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
         else:
             print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
 
-    cap=cv2.VideoCapture(url)
+    if isinstance(url, str) and url.startswith("rtsp://"):
+        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    else:
+        cap = cv2.VideoCapture(url)
+
     if not cap.isOpened():
         print(f"[cap] Cannot open: {url}")
         if vlc_mgr: vlc_mgr.stop(); return
@@ -258,6 +282,26 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     active_cam_id = cam_id or location or "default"
     zones   =ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=active_cam_id, db=db_module)
     viz     =Visualizer()
+
+    # ── Signal Config: Incidents Enabled/Disabled from DB (cctv_cameras) ─────
+    if signal_config is None and db_module:
+        current_signal_cfg = db_module.get_camera_signal_config(active_cam_id)
+    elif isinstance(signal_config, dict):
+        current_signal_cfg = dict(signal_config)
+    else:
+        current_signal_cfg = {}
+
+    fall_active = bool(current_signal_cfg.get("fall", True))
+    hand_active = bool(current_signal_cfg.get("hand_sos", True))
+    pose_active = bool(current_signal_cfg.get("pose_sos", current_signal_cfg.get("hand_sos", True)))
+    obj_active  = bool(current_signal_cfg.get("object", True))
+    last_cfg_refresh_ts = time.time()
+
+    print(f"[{source_id[-30:]}] 🎯 Incident Config from DB: "
+          f"Fall={'[ON]' if fall_active else '[OFF]'} | "
+          f"Hand SOS={'[ON]' if hand_active else '[OFF]'} | "
+          f"Pose SOS={'[ON]' if pose_active else '[OFF]'} | "
+          f"Object={'[ON]' if obj_active else '[OFF]'}")
 
     alert_cd     = GEN.get("alert_cooldown_seconds", cfg.get("fall",{}).get("cooldown_seconds",120))
     snapshot_dir = str(ROOT / "logs" / "snapshots")
@@ -349,7 +393,9 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     # Stream gap during loop transition — brief retry
                     cap.release()
                     time.sleep(1)
-                    cap = cv2.VideoCapture(url)
+                    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG if isinstance(url, str) and url.startswith("rtsp://") else cv2.CAP_ANY)
+                    if isinstance(url, str) and url.startswith("rtsp://"):
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
                     if cap.isOpened():
                         retry_count = 0
                 continue
@@ -359,6 +405,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
             frame=preprocess(raw,W,H)
             h,w=frame.shape[:2]
+            clean_frame=frame.copy()
             zones.draw(frame)
 
             rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
@@ -369,6 +416,26 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
             lab=cv2.cvtColor(frame,cv2.COLOR_BGR2LAB)
             lab[:,:,0]=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8)).apply(lab[:,:,0])
             frame_clahe=cv2.cvtColor(lab,cv2.COLOR_LAB2BGR)
+
+            # Periodic check for dynamic signal_config updates in DB (every 10s)
+            now_loop_t = time.time()
+            if db_module and (now_loop_t - last_cfg_refresh_ts > 10.0):
+                last_cfg_refresh_ts = now_loop_t
+                try:
+                    new_sig_cfg = db_module.get_camera_signal_config(active_cam_id)
+                    if new_sig_cfg != current_signal_cfg:
+                        current_signal_cfg = new_sig_cfg
+                        fall_active = bool(current_signal_cfg.get("fall", True))
+                        hand_active = bool(current_signal_cfg.get("hand_sos", True))
+                        pose_active = bool(current_signal_cfg.get("pose_sos", current_signal_cfg.get("hand_sos", True)))
+                        obj_active  = bool(current_signal_cfg.get("object", True))
+                        print(f"[{source_id[-30:]}] 🔄 Live Refreshed Incident Config: "
+                              f"Fall={'[ON]' if fall_active else '[OFF]'} | "
+                              f"Hand SOS={'[ON]' if hand_active else '[OFF]'} | "
+                              f"Pose SOS={'[ON]' if pose_active else '[OFF]'} | "
+                              f"Object={'[ON]' if obj_active else '[OFF]'}")
+                except Exception:
+                    pass
 
             now_time=time.strftime("%Y-%m-%d %H:%M:%S")
             resp=_api("/detect_all",frame)
@@ -401,32 +468,32 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 assigned=[]
                 boxes=None; kpts=None; posture_by_idx=[]
 
-            # ── Object Guardian ──────────────────────────────────────────
-            # [STEP 1-2] ส่ง assigned ที่มี track_id ถาวรและ keypoints สำหรับข้อมือ
-            for oa in obj_grd.update(frame, odets, assigned, source_id=source_id, location=location):
-                obbox = oa.get("bbox") or [0, 0, 0, 0]
-                ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
-                if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
-                    continue
-                # [W5] ส่ง insert_object_event ให้ตรงกับ signature จริงใน database.py
-                try:
-                    insert_object_event(
-                        event_type         = oa.get("event_type", "object_event"),
-                        source_id          = source_id,
-                        location           = location,
-                        track_id           = oa.get("track_id"),
-                        person_track_id    = oa.get("person_track_id") or oa.get("owner_track_id") or oa.get("suspect_track_id"),
-                        class_name         = oa.get("class_name", ""),
-                        confidence         = float(oa.get("confidence", 0.0)),
-                        bbox               = oa.get("bbox"),
-                        image_path         = oa.get("image_path"),
-                        seconds_unattended = float(oa.get("seconds_unattended", 0.0)),
-                        alert_raised       = bool(oa.get("alert_raised", True)),
-                        meta               = oa,
-                    )
-                except Exception as e:
-                    print(f"[DB] object_event insert error: {e}")
-            obj_grd.draw(frame)
+            # ── Object Guardian (Gated by DB signal_config) ──────────────
+            if obj_active:
+                for oa in obj_grd.update(frame, odets, assigned, source_id=source_id, location=location):
+                    obbox = oa.get("bbox") or [0, 0, 0, 0]
+                    ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
+                    if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
+                        continue
+                    # [W5] ส่ง insert_object_event ให้ตรงกับ signature จริงใน database.py
+                    try:
+                        insert_object_event(
+                            event_type         = oa.get("event_type", "object_event"),
+                            source_id          = source_id,
+                            location           = location,
+                            track_id           = oa.get("track_id"),
+                            person_track_id    = oa.get("person_track_id") or oa.get("owner_track_id") or oa.get("suspect_track_id"),
+                            class_name         = oa.get("class_name", ""),
+                            confidence         = float(oa.get("confidence", 0.0)),
+                            bbox               = oa.get("bbox"),
+                            image_path         = oa.get("image_path"),
+                            seconds_unattended = float(oa.get("seconds_unattended", 0.0)),
+                            alert_raised       = bool(oa.get("alert_raised", True)),
+                            meta               = oa,
+                        )
+                    except Exception as e:
+                        print(f"[DB] object_event insert error: {e}")
+                obj_grd.draw(frame)
 
             # [W2] cleanup tracks ที่หายไปจากเฟรม
             # [FIX-tracking] เดิมเช็คจาก `active` (เฉพาะ track_id ที่เห็นในเฟรมปัจจุบันเฟรม
@@ -459,10 +526,10 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     cx, cy = (x1+x2)/2/max(1, w), (y1+y2)/2/max(1, h)
                     if not zones.in_zone(cx, cy): continue
 
-                    # ── Fall Detection (Zone-gated) ──────────────────────
+                    # ── Fall Detection (Zone-gated & DB Signal-Config gated) ──
+                    posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
                     in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
-                    if in_fall_zone:
-                        posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
+                    if fall_active and in_fall_zone:
                         fr=fall_d.process(tid,kp,bbox,h,w,
                                            posture_class=posture_class,
                                            posture_conf=posture_conf)  # [F2]
@@ -513,8 +580,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     # Suppress if moving rapidly (running > 0.45 frame_h/s, not normal stepping/gesturing)
                     is_moving_fast = (vel_px_s / max(1.0, float(h))) > 0.45
 
-                    # Suppress Hand SOS if both arms are overhead (Pose SOS), fallen, lying, or moving fast
-                    if both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:
+                    # Suppress Hand SOS if disabled by signal_config, both arms overhead (Pose SOS), fallen, lying, or moving fast
+                    if (not hand_active) or both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:
                         hand_states[tid] = 0
                         hand_consec3[tid] = 0
                         hand_recent_sos[tid].clear()
@@ -579,7 +646,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             if can_emit and not hand_ev.get(tid):
                                 # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
                                 b64_snap = create_bbox_snapshot_base64(
-                                    raw, bbox=bbox, label=f"HAND SOS [tid={tid}]", color=(0, 255, 0)
+                                    clean_frame, bbox=bbox, label=f"HAND SOS [tid={tid}]", color=(0, 255, 0), coord_size=(w, h)
                                 )
                                 raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                                 try:
@@ -598,6 +665,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                             "snapshot_base64": raw_b64,
                                             "gesture":         "hand_sos",
                                             "bbox":            [int(v) for v in bbox],
+                                            "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                            "frame_size":      [w, h],
                                         },
                                     )
                                     print(f"  💾 [DB INSERTED] Hand SOS uuid={ev_uuid} (base64, no banner)")
@@ -614,13 +683,13 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
                     # ── Hands Over Head SOS (Pose SOS) ───────────────────
                     in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
-                    if in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
+                    if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
                         head_res = head_d.process(tid, kp, h, w, timestamp=time.time())
                         can_emit_pose = (now_t - _pose_last_event_ts.get(tid, -1e9)) >= pose_cooldown_seconds
                         if head_res.get("triggered") and can_emit_pose:
                             # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
                             b64_snap = create_bbox_snapshot_base64(
-                                raw, bbox=bbox, label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s", color=(0, 165, 255)
+                                clean_frame, bbox=bbox, label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s", color=(0, 165, 255), coord_size=(w, h)
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                             try:
@@ -640,6 +709,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "gesture":         "pose_sos",
                                         "time_held":       head_res.get("time_held", 0.0),
                                         "bbox":            [int(v) for v in bbox],
+                                        "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                        "frame_size":      [w, h],
                                     },
                                 )
                                 print(f"  💾 [DB INSERTED] Pose SOS uuid={ev_uuid} (base64, no banner)")
@@ -683,7 +754,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     is_critical=fr.get("is_critical") and not fr.get("recovered_quickly")
                     is_confirmed=(fr.get("is_fallen") or esc) and not fr.get("recovered_quickly")
 
-                    if (is_critical or is_confirmed):
+                    if fall_active and (is_critical or is_confirmed):
                         # ── Flapping dedup (hysteresis) ──
                         # If this tid had a fall alert recently (within
                         # confirm_seconds * hysteresis_factor), treat it as
@@ -715,7 +786,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
                             # In-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
                             b64_snap = create_bbox_snapshot_base64(
-                                raw, bbox=bbox, label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg", color=(0, 0, 255)
+                                clean_frame, bbox=bbox, label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg", color=(0, 0, 255), coord_size=(w, h)
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                             try:
@@ -735,6 +806,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "snapshotUrl":     b64_snap,
                                         "snapshot_base64": raw_b64,
                                         "bbox":            [int(v) for v in bbox],
+                                        "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                        "frame_size":      [w, h],
                                     }
                                 )
                                 print(f"  💾 [DB INSERTED] Fall uuid={ev_uuid} (base64, no banner)")
@@ -758,6 +831,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
 def run_source(s):
     try:
+        silence_stream_noise()
         cid = s.get("id") or s.get("code") or ""
         main(
             s["path"],
@@ -766,6 +840,7 @@ def run_source(s):
             cam_id=cid,
             use_vlc=s.get("use_vlc", False),
             loop=s.get("loop", False),
+            signal_config=s.get("signal_config"),
         )
     except Exception as e:
         import traceback
@@ -805,12 +880,15 @@ if __name__=="__main__":
                 "port": args.port + i,
                 "use_vlc": args.use_vlc,
                 "loop": False,
+                "signal_config": c.get("signal_config"),
                 "enabled": True,
             })
         print(f"[main] Loaded {len(sources)} active camera(s) from database.")
     elif args.source:
         p = Path(args.source)
         loc = args.location or (p.stem if p.exists() else "stream")
+        target_cam = args.cam_id or ""
+        sig_cfg = db_module.get_camera_signal_config(target_cam) if (target_cam and db_module) else None
         sources.append({
             "id": args.cam_id or "source_1",
             "path": args.source,
@@ -818,6 +896,7 @@ if __name__=="__main__":
             "port": args.port,
             "use_vlc": args.use_vlc,
             "loop": args.loop,
+            "signal_config": sig_cfg,
             "enabled": True,
         })
     elif args.dir:

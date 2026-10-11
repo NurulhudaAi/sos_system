@@ -214,20 +214,29 @@ def create_bbox_snapshot_base64(
     color: tuple = (0, 0, 255),
     max_width: int = 1280,
     quality: int = 80,
+    coord_size: tuple = None,
 ) -> str:
     """
     Creates an in-memory Base64 snapshot with bounding box only (NO BANNER).
     Does NOT write any JPEG file to disk.
+    If coord_size=(coord_w, coord_h) is provided and differs from frame shape,
+    bbox is automatically scaled to match the image dimensions.
     Returns: 'data:image/jpeg;base64,...'
     """
     if frame is None:
         return ""
     img = frame.copy()
     if bbox is not None:
-        bx1, by1, bx2, by2 = [int(v) for v in bbox]
+        bx1, by1, bx2, by2 = [float(v) for v in bbox]
         ih, iw = img.shape[:2]
-        bx1, by1 = max(0, bx1), max(0, by1)
-        bx2, by2 = min(iw - 1, bx2), min(ih - 1, by2)
+        if coord_size and len(coord_size) == 2:
+            cw, ch = coord_size
+            if cw > 0 and ch > 0 and (cw != iw or ch != ih):
+                sx = iw / float(cw)
+                sy = ih / float(ch)
+                bx1, by1, bx2, by2 = bx1 * sx, by1 * sy, bx2 * sx, by2 * sy
+        bx1, by1 = max(0, int(bx1)), max(0, int(by1))
+        bx2, by2 = min(iw - 1, int(bx2)), min(ih - 1, int(by2))
         cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 3)
         if label:
             (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)

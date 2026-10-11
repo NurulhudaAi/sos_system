@@ -108,8 +108,20 @@ class ZoneManager:
             poly_pts = None
             pts = z_copy.get("points")
             if (z_copy.get("type") == "polygon" or pts is not None) and pts:
-                if len(pts) >= 3:
-                    poly_pts = np.array(pts, dtype=np.float32)
+                cleaned = []
+                if isinstance(pts, (list, tuple)):
+                    for p in pts:
+                        if isinstance(p, dict):
+                            if "x" in p and "y" in p:
+                                cleaned.append([float(p["x"]), float(p["y"])])
+                            elif "X" in p and "Y" in p:
+                                cleaned.append([float(p["X"]), float(p["Y"])])
+                            elif "lng" in p and "lat" in p:
+                                cleaned.append([float(p["lng"]), float(p["lat"])])
+                        elif isinstance(p, (list, tuple)) and len(p) >= 2:
+                            cleaned.append([float(p[0]), float(p[1])])
+                if len(cleaned) >= 3:
+                    poly_pts = np.array(cleaned, dtype=np.float32)
             new_zones.append(z_copy)
             new_compiled.append(poly_pts)
 
@@ -156,7 +168,7 @@ class ZoneManager:
             return
         h, w = frame.shape[:2]
         for i, z in enumerate(self.zones):
-            name = z.get("name", f"Zone-{i+1}")
+            name = z.get("name") or z.get("label", f"Zone-{i+1}")
             dets = z.get("detectors")
             tag = f"{name} ({','.join(dets)})" if dets else name
 

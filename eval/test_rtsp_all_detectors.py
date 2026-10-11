@@ -80,6 +80,8 @@ def save_debug_snapshot(frame, event_type, video_stem, ts_sec, tid, bbox=None, e
                     "event_type":        event_type,
                     "video_timestamp_s": round(ts_sec, 2),
                     "bbox":              [int(v) for v in bbox] if bbox is not None else None,
+                    "bbox_norm":         [round(bbox[0]/frame.shape[1], 4), round(bbox[1]/frame.shape[0], 4), round(bbox[2]/frame.shape[1], 4), round(bbox[3]/frame.shape[0], 4)] if bbox is not None else None,
+                    "frame_size":        [frame.shape[1], frame.shape[0]],
                 },
             )
             print(f"  💾 [DB INSERTED] {event_type.title()} uuid={ev_uuid} (base64, no banner)")

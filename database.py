@@ -13,7 +13,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime, timedelta, UTC
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -510,7 +510,68 @@ def get_camera_zones(cam_id: str) -> list:
     return []
 
 
+def get_camera_signal_config(cam_id: str) -> Dict[str, bool]:
+    """Retrieve signal_config (enabled/disabled incidents) for a camera from MongoDB cctv_cameras.
+
+    Defaults if camera has no specific signal_config configured:
+      fall: True, hand_sos: True, pose_sos: True, gesture: True, object: True, inactivity: False
+    """
+    default_cfg = {
+        "fall": True,
+        "hand_sos": True,
+        "pose_sos": True,
+        "gesture": True,
+        "object": True,
+        "inactivity": False,
+    }
+    if not cam_id:
+        return default_cfg
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        cam = col.find_one({
+            "$or": [
+                {"code": cam_id},
+                {"id": cam_id},
+                {"name": cam_id},
+                {"position_note": cam_id}
+            ]
+        })
+        if cam and "signal_config" in cam and isinstance(cam["signal_config"], dict):
+            cfg = dict(cam["signal_config"])
+            res = dict(default_cfg)
+            for k, v in cfg.items():
+                if v is not None:
+                    res[k] = bool(v)
+            if "hand_sos" in cfg:
+                res["hand_sos"] = bool(cfg["hand_sos"])
+                if "pose_sos" not in cfg:
+                    res["pose_sos"] = bool(cfg["hand_sos"])
+                if "gesture" not in cfg:
+                    res["gesture"] = bool(cfg["hand_sos"])
+            return res
+    except Exception as e:
+        logger.debug(f"get_camera_signal_config error for {cam_id}: {e}")
+    return default_cfg
+
+
 # ─── RTSP Crypto & Active Cameras Management ─────────────────────────────────
+
+def encrypt_rtsp_url(plain_url: str, secret_hex: Optional[str] = None) -> Tuple[str, str]:
+    """Encrypt a plain RTSP URL using AES-256-GCM for MongoDB.
+    Returns (encrypted_b64, iv_b64).
+    """
+    if not plain_url:
+        return "", ""
+    secret = secret_hex or os.getenv("RTSP_SECRET", "")
+    if not secret:
+        raise ValueError("RTSP_SECRET is not configured in environment")
+    key = bytes.fromhex(secret.strip())
+    iv = os.urandom(12)  # Standard 96-bit nonce for AES-GCM
+    aesgcm = AESGCM(key)
+    ciphertext_with_tag = aesgcm.encrypt(iv, plain_url.encode("utf-8"), None)
+    return base64.b64encode(ciphertext_with_tag).decode("utf-8"), base64.b64encode(iv).decode("utf-8")
+
 
 def decrypt_rtsp_url(encrypted_b64: str, iv_b64: str, secret_hex: Optional[str] = None) -> str:
     """Decrypt an AES-256-GCM encrypted RTSP URL from MongoDB."""
@@ -571,6 +632,7 @@ def get_active_cameras(cam_id: Optional[str] = None) -> List[Dict[str, Any]]:
                 continue
 
             zones = doc.get("zones", [])
+            signal_config = doc.get("signal_config") or {}
             cameras.append({
                 "id": cam_code,
                 "code": cam_code,
@@ -579,6 +641,7 @@ def get_active_cameras(cam_id: Optional[str] = None) -> List[Dict[str, Any]]:
                 "path": rtsp_url,
                 "rtsp_url": rtsp_url,
                 "zones": zones,
+                "signal_config": signal_config,
                 "enabled": True,
             })
         logger.info(f"Loaded {len(cameras)} camera(s) from MongoDB cctv_cameras (filter={cam_id!r})")
@@ -639,3 +702,91 @@ try:
     _create_indexes(_get_db())
 except Exception as e:
     logger.warning(f"Index initialization deferred: {e}")
+
+
+def register_or_update_camera(
+    code: str,
+    rtsp_url: str,
+    name: Optional[str] = None,
+    position_note: Optional[str] = None,
+    encrypt: bool = True,
+    active: bool = True
+) -> bool:
+    """Insert or update camera in cctv_cameras collection."""
+    try:
+        db = _get_db()
+        col = db["cctv_cameras"]
+        doc: Dict[str, Any] = {
+            "code": code,
+            "name": name or code,
+            "position_note": position_note or (name or code),
+            "active": active,
+            "updated_at": _utcnow()
+        }
+        if encrypt:
+            enc, iv = encrypt_rtsp_url(rtsp_url)
+            doc["rtsp_url_encrypted"] = enc
+            doc["rtsp_iv"] = iv
+            doc["rtsp_url"] = None
+        else:
+            doc["rtsp_url"] = rtsp_url
+            doc["rtsp_url_encrypted"] = None
+            doc["rtsp_iv"] = None
+
+        col.update_one({"code": code}, {"$set": doc}, upsert=True)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to register camera {code}: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Database & RTSP Security CLI Utilities")
+    parser.add_argument("--encrypt", type=str, help="Encrypt a plain RTSP URL using RTSP_SECRET")
+    parser.add_argument("--decrypt", nargs=2, metavar=("ENC_B64", "IV_B64"), help="Decrypt an RTSP URL using ENC_B64 and IV_B64")
+    parser.add_argument("--list-cams", action="store_true", help="List active cameras from MongoDB")
+    parser.add_argument("--add-cam", action="store_true", help="Register/Update a camera in MongoDB cctv_cameras")
+    parser.add_argument("--code", type=str, help="Camera code (e.g. CAM_01)")
+    parser.add_argument("--url", type=str, help="RTSP URL")
+    parser.add_argument("--name", type=str, default="", help="Camera display name")
+    parser.add_argument("--plain", action="store_true", help="Store RTSP URL as plaintext without AES encryption")
+
+    args = parser.parse_args()
+
+    if args.encrypt:
+        enc, iv = encrypt_rtsp_url(args.encrypt)
+        print("\n✅ [AES-256-GCM Encrypted Successfully]")
+        print(f"rtsp_url_encrypted : \"{enc}\"")
+        print(f"rtsp_iv            : \"{iv}\"")
+        print("\nExample MongoDB update/insert snippet:")
+        print(f'{{"$set": {{"rtsp_url_encrypted": "{enc}", "rtsp_iv": "{iv}"}}}}')
+
+    elif args.decrypt:
+        dec = decrypt_rtsp_url(args.decrypt[0], args.decrypt[1])
+        print(f"\n🔓 Decrypted RTSP URL: {dec}")
+
+    elif args.list_cams:
+        cams = get_active_cameras()
+        print(f"\n🎥 Found {len(cams)} active camera(s) in MongoDB:")
+        for c in cams:
+            print(f" - [{c.get('code')}] {c.get('name')} | Path: {c.get('path')} | Active: {c.get('active', True)}")
+
+    elif args.add_cam:
+        if not args.code or not args.url:
+            print("❌ Error: --code and --url are required when using --add-cam")
+            sys.exit(1)
+        ok = register_or_update_camera(
+            code=args.code,
+            rtsp_url=args.url,
+            name=args.name or args.code,
+            encrypt=not args.plain,
+            active=True
+        )
+        if ok:
+            mode_str = "plaintext" if args.plain else "AES-256-GCM encrypted"
+            print(f"✅ Camera '{args.code}' saved to MongoDB successfully ({mode_str}).")
+        else:
+            print(f"❌ Failed to save camera '{args.code}'. Check log for details.")
+    else:
+        parser.print_help()
