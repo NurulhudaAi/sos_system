@@ -764,11 +764,11 @@ if __name__ == "__main__":
 
     elif args.decrypt:
         dec = decrypt_rtsp_url(args.decrypt[0], args.decrypt[1])
-        print(f"\n🔓 Decrypted RTSP URL: {dec}")
+        print(f"\nDecrypted RTSP URL: {dec}")
 
     elif args.list_cams:
         cams = get_active_cameras()
-        print(f"\n🎥 Found {len(cams)} active camera(s) in MongoDB:")
+        print(f"\nFound {len(cams)} active camera(s) in MongoDB:")
         for c in cams:
             print(f" - [{c.get('code')}] {c.get('name')} | Path: {c.get('path')} | Active: {c.get('active', True)}")
 

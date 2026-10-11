@@ -83,22 +83,38 @@ ROOT = Path(__file__).resolve().parent
 SNAPSHOT_ROOT = ROOT / "logs" / "snapshots"
 cfg = yaml.safe_load((ROOT/"config/thresholds.yaml").read_text())
 GENERAL = cfg.get('general', {})
+
+def resolve_model_path(model_path_str: Optional[str], default_name: str = "") -> str:
+    path_str = model_path_str or default_name
+    if not path_str:
+        return ""
+    p = Path(path_str)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    # 1. Direct match relative to project ROOT
+    if (ROOT / p).exists():
+        return str((ROOT / p).resolve())
+    # 2. Check inside project's models/ directory
+    if (ROOT / "models" / p.name).exists():
+        return str((ROOT / "models" / p.name).resolve())
+    # 3. Check parent directory ../models/ (legacy support)
+    if (ROOT.parent / "models" / p.name).exists():
+        return str((ROOT.parent / "models" / p.name).resolve())
+    return path_str
+
 _yolo_model_str = GENERAL.get('yolo_model', 'models/yolov8m-pose.pt')
-_p = ROOT / _yolo_model_str if not Path(_yolo_model_str).is_absolute() else Path(_yolo_model_str)
-YOLO_MODEL = str(_p) if _p.exists() else _yolo_model_str
+YOLO_MODEL = resolve_model_path(_yolo_model_str, 'models/yolov8m-pose.pt')
 PERSON_CONF = GENERAL.get('person_conf', 0.30)
 
-# [FIX] Separate general-object detection model config
-# Default is the bare model name (not a relative path) so Ultralytics
-# can auto-download+cache it if it's not present locally yet.
-OBJECT_MODEL = GENERAL.get('object_model', '../models/yolov8n.pt')
+_object_model_str = GENERAL.get('object_model', 'models/yolov8n.pt')
+OBJECT_MODEL = resolve_model_path(_object_model_str, 'models/yolov8n.pt')
 OBJECT_CONF  = GENERAL.get(
     'object_conf',
     cfg.get('object_guardian', {}).get('min_confidence', 0.4)
 )
 
-# [NEW] Optional custom laying/standing pose model config
-FALL_POSE_MODEL = GENERAL.get('fall_pose_model')  # None = disabled, use generic pose model only
+_fall_pose_str = GENERAL.get('fall_pose_model')
+FALL_POSE_MODEL = resolve_model_path(_fall_pose_str) if _fall_pose_str else None
 FALL_POSE_CONF  = GENERAL.get('fall_pose_conf', PERSON_CONF)
 FALL_POSE_CLASS_MAP = GENERAL.get('fall_pose_class_map', {0: 'laying', 1: 'standing'})
 # normalize keys to int (yaml may load them as int already, but be safe)

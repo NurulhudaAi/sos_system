@@ -26,7 +26,8 @@ logs/
 alerts/
 
 # Video files (too large for git)
-videos/
+videos/*
+!videos/.gitkeep
 *.mp4
 *.avi
 *.mkv

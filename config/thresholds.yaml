@@ -61,7 +61,8 @@ general:
   person_conf: 0.20
   fall_pose_conf: 0.20
   yolo_model: "models/yolov8m-pose.pt"
-  fall_pose_model: "../models/FallGuard_YOLOv8Pose.pt" 
+  object_model: "models/yolov8n.pt"
+  fall_pose_model: "models/FallGuard_YOLOv8Pose.pt" 
   fall_pose_class_map:
     0: laying
     1: standing

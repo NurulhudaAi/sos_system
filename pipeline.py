@@ -402,7 +402,7 @@ class AlertDispatcher:
                 cv2.imwrite(str(path), frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             except Exception:
                 cv2.imwrite(str(path), frame)
-            print(f"📸 [SNAPSHOT SAVED] {path}")
+            print(f"[SNAPSHOT SAVED] {path}")
 
             # ── Write metadata JSON ───────────────────────────────────────────
             try:

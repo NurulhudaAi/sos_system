@@ -93,7 +93,7 @@ TRIG_FRAMES = STREAM_CFG.get("trigger_frames", 5)
 LYING_ANG   = STREAM_CFG.get("lying_angle_thresh", 45)
 W, H        = 1920, 1080
 SKIP        = GEN.get("frame_skip", 2)
-DET_URL     = GEN.get("detector_url", "http://127.0.0.1:8000")
+DET_URL     = os.getenv("DETECTOR_URL", GEN.get("detector_url", "http://127.0.0.1:8000"))
 DEVICE      = ("mps" if torch.backends.mps.is_available() else
                "cuda" if torch.cuda.is_available() else "cpu")
 print(f"[main] Device: {DEVICE}")
@@ -297,7 +297,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     obj_active  = bool(current_signal_cfg.get("object", True))
     last_cfg_refresh_ts = time.time()
 
-    print(f"[{source_id[-30:]}] 🎯 Incident Config from DB: "
+    print(f"[{source_id[-30:]}] [CONFIG] Incident Config from DB: "
           f"Fall={'[ON]' if fall_active else '[OFF]'} | "
           f"Hand SOS={'[ON]' if hand_active else '[OFF]'} | "
           f"Pose SOS={'[ON]' if pose_active else '[OFF]'} | "
@@ -429,7 +429,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         hand_active = bool(current_signal_cfg.get("hand_sos", True))
                         pose_active = bool(current_signal_cfg.get("pose_sos", current_signal_cfg.get("hand_sos", True)))
                         obj_active  = bool(current_signal_cfg.get("object", True))
-                        print(f"[{source_id[-30:]}] 🔄 Live Refreshed Incident Config: "
+                        print(f"[{source_id[-30:]}] [REFRESH] Live Refreshed Incident Config: "
                               f"Fall={'[ON]' if fall_active else '[OFF]'} | "
                               f"Hand SOS={'[ON]' if hand_active else '[OFF]'} | "
                               f"Pose SOS={'[ON]' if pose_active else '[OFF]'} | "
@@ -669,7 +669,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                             "frame_size":      [w, h],
                                         },
                                     )
-                                    print(f"  💾 [DB INSERTED] Hand SOS uuid={ev_uuid} (base64, no banner)")
+                                    print(f"  [DB INSERTED] Hand SOS uuid={ev_uuid} (base64, no banner)")
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
                                 _hand_last_event_ts[tid] = time.time()
@@ -713,7 +713,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "frame_size":      [w, h],
                                     },
                                 )
-                                print(f"  💾 [DB INSERTED] Pose SOS uuid={ev_uuid} (base64, no banner)")
+                                print(f"  [DB INSERTED] Pose SOS uuid={ev_uuid} (base64, no banner)")
                             except Exception as e:
                                 print(f"[DB] pose_sos insert error: {e}")
                             _pose_last_event_ts[tid] = time.time()
@@ -810,7 +810,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "frame_size":      [w, h],
                                     }
                                 )
-                                print(f"  💾 [DB INSERTED] Fall uuid={ev_uuid} (base64, no banner)")
+                                print(f"  [DB INSERTED] Fall uuid={ev_uuid} (base64, no banner)")
                             except Exception as e:
                                 print(f"[DB] fall insert error: {e}")
                             _fall_last_event_ts[tid] = time.time()
@@ -867,7 +867,7 @@ if __name__=="__main__":
     if args.from_db:
         target_cam = args.cam_id if args.cam_id else None
         target_msg = f"for cam_id={target_cam}" if target_cam else "(all active)"
-        print(f"[main] 🔄 Fetching cameras from MongoDB Atlas {target_msg}...")
+        print(f"[main] Fetching cameras from MongoDB Atlas {target_msg}...")
         db_cams = db_module.get_active_cameras(cam_id=target_cam)
         for i, c in enumerate(db_cams):
             if not c.get("path"):
@@ -938,7 +938,7 @@ if __name__=="__main__":
         sys.exit(0)
 
     print(f"\n{'='*60}")
-    print(f"🎬 Multi-Source Detection System")
+    print(f"Multi-Source Detection System")
     print(f"{'='*60}")
     print(f"Enabled: {len(sources)} sources")
     for s in sources:
