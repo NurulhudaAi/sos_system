@@ -25,6 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Upgrade pip and pre-install build prerequisites
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
+# Pre-install CPU-only PyTorch to avoid downloading ~2.3GB CUDA packages in Docker
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
 # Install Python requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
