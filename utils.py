@@ -254,3 +254,134 @@ def create_bbox_snapshot_base64(
                 cv2.LINE_AA,
             )
     return frame_to_base64(img, max_width=max_width, quality=quality)
+
+
+import json
+from datetime import datetime
+from typing import Union, Optional, Tuple
+
+def save_annotated_snapshot(
+    frame,
+    event_type: str,
+    bbox=None,
+    label: str = "",
+    color: tuple = (0, 0, 255),
+    coord_size: tuple = None,
+    snapshot_dir: Union[str, Path] = "logs/snapshots",
+    save_local: bool = True,
+    extra_meta: dict = None,
+    max_width: int = 1280,
+    quality: int = 90,
+    all_tracks: Optional[list] = None,
+) -> Tuple[str, Optional[str]]:
+    """
+    Annotates frame with bounding box and label.
+    1. Returns base64 data URL string.
+    2. If save_local is True:
+       - Saves JPEG image to snapshot_dir / f"{event_type}_{ts}.jpg"
+       - Saves JSON metadata to f"{event_type}_{ts}.json"
+       - Appends line to logs/alerts.log
+       - Returns (base64_str, str(file_path))
+    Otherwise returns (base64_str, None).
+    """
+    if frame is None:
+        return "", None
+
+    img = frame.copy()
+    ih, iw = img.shape[:2]
+
+    # Draw bounding boxes for all other people in the scene
+    if all_tracks:
+        for trk in all_tracks:
+            t_box = trk.get("bbox")
+            t_id = trk.get("track_id", trk.get("tid"))
+            if t_box is None:
+                continue
+            # Check if this person is the primary alert person (drawn on top below)
+            if bbox is not None and abs(t_box[0] - bbox[0]) < 10 and abs(t_box[1] - bbox[1]) < 10:
+                continue
+            tx1, ty1, tx2, ty2 = [float(v) for v in t_box]
+            if coord_size and len(coord_size) == 2:
+                cw, ch = coord_size
+                if cw > 0 and ch > 0 and (cw != iw or ch != ih):
+                    sx = iw / float(cw)
+                    sy = ih / float(ch)
+                    tx1, ty1, tx2, ty2 = tx1 * sx, ty1 * sy, tx2 * sx, ty2 * sy
+            tx1, ty1 = max(0, int(tx1)), max(0, int(ty1))
+            tx2, ty2 = min(iw - 1, int(tx2)), min(ih - 1, int(ty2))
+            cv2.rectangle(img, (tx1, ty1), (tx2, ty2), (180, 180, 180), 2)
+            cv2.putText(
+                img,
+                f"ID:{t_id}" if t_id is not None else "person",
+                (tx1, max(15, ty1 - 5)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (180, 180, 180),
+                1,
+                cv2.LINE_AA,
+            )
+
+    if bbox is not None:
+        bx1, by1, bx2, by2 = [float(v) for v in bbox]
+        if coord_size and len(coord_size) == 2:
+            cw, ch = coord_size
+            if cw > 0 and ch > 0 and (cw != iw or ch != ih):
+                sx = iw / float(cw)
+                sy = ih / float(ch)
+                bx1, by1, bx2, by2 = bx1 * sx, by1 * sy, bx2 * sx, by2 * sy
+        bx1, by1 = max(0, int(bx1)), max(0, int(by1))
+        bx2, by2 = min(iw - 1, int(bx2)), min(ih - 1, int(by2))
+        cv2.rectangle(img, (bx1, by1), (bx2, by2), color, 3)
+        if label:
+            (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
+            bg_y1 = max(0, by1 - lh - 10)
+            bg_y2 = by1
+            cv2.rectangle(img, (bx1, bg_y1), (min(iw - 1, bx1 + lw + 10), bg_y2), color, -1)
+            cv2.putText(
+                img,
+                label,
+                (bx1 + 5, bg_y2 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+    b64_url = frame_to_base64(img, max_width=max_width, quality=quality)
+    saved_path_str = None
+
+    if save_local:
+        try:
+            s_dir = Path(snapshot_dir)
+            s_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            out_file = s_dir / f"{event_type}_{ts}.jpg"
+            cv2.imwrite(str(out_file), img, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+            saved_path_str = str(out_file)
+
+            # Metadata JSON
+            meta_file = out_file.with_suffix('.json')
+            meta_data = {
+                "timestamp": datetime.now().isoformat(),
+                "event_type": event_type,
+                "label": label,
+                "image_file": str(out_file),
+                "bbox": [int(v) for v in bbox] if bbox is not None else None,
+                "extra": extra_meta or {}
+            }
+            with open(meta_file, 'w', encoding='utf-8') as f:
+                json.dump(meta_data, f, indent=2, ensure_ascii=False)
+
+            # Append to logs/alerts.log
+            log_dir = Path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_line = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:-3]} | ALERT: {label or event_type.upper()} | file={out_file.name} | {repr(extra_meta or {})}\n"
+            with open(log_dir / "alerts.log", "a", encoding="utf-8") as lf:
+                lf.write(log_line)
+
+            print(f"  [SNAPSHOT SAVED] {out_file} (logged to logs/alerts.log)")
+        except Exception as e:
+            print(f"⚠️  [SNAPSHOT ERROR] Failed to save snapshot: {e}")
+
+    return b64_url, saved_path_str

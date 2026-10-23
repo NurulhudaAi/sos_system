@@ -108,6 +108,7 @@ class HandsOverHeadDetector:
         if not wrists_visible or not has_reference:
             if now - self._last_detected.get(tid, -1e9) > 0.5:
                 self._since.pop(tid, None)
+                self._last_detected.pop(tid, None)
             return {
                 "gesture_detected": False,
                 "is_confirmed": False,
@@ -130,6 +131,7 @@ class HandsOverHeadDetector:
             torso_h = max(10.0, avg_hip_y - shoulder_y)
 
         # Determine head reference Y (use top of visible head keypoints 0..4, or estimate from torso)
+        # Determine head reference Y (use top of visible head keypoints 0..4, or estimate from torso)
         head_pts = [_kp(kps, i) for i in (0, 1, 2, 3, 4) if _vis(_kp(kps, i), self.min_kp_conf)]
         if head_pts:
             ref_y = min(float(p[1]) for p in head_pts)
@@ -138,16 +140,29 @@ class HandsOverHeadDetector:
         else:
             ref_y = shoulder_y - margin_px
 
-        # Both wrists must be ABOVE shoulders, and at or above head level
+        # Both wrists must be ABOVE shoulders, and near/above head level
         l_wrist_y = float(l_wrist[1])
         r_wrist_y = float(r_wrist[1])
+        shoulder_w = abs(float(l_shoulder[0]) - float(r_shoulder[0]))
+        wrist_sep = abs(float(l_wrist[0]) - float(r_wrist[0]))
 
+        # [Day 4] Wrist Separation Filter:
+        # Genuine Pose SOS requires arms raised apart in a V-shape.
+        # If wrists are touching or close together (< 0.55 * shoulder_w or < 18px),
+        # the person is holding an object (car trunk, box, phone, hair) — NOT SOS.
+        min_sep = max(18.0, 0.55 * shoulder_w)
+        arms_spread_ok = wrist_sep >= min_sep
+
+        # Genuine Pose SOS requires both wrists to be CLEARLY above shoulders and at or above head level.
+        # Hands resting at chest, collarbone, or neck (e.g. Hand SOS State 1) must never trigger Pose SOS.
         gesture_detected = (
-            l_wrist_y < shoulder_y and
-            r_wrist_y < shoulder_y and
-            l_wrist_y <= ref_y + margin_px and
-            r_wrist_y <= ref_y + margin_px
+            arms_spread_ok and
+            l_wrist_y <= shoulder_y - 12.0 and
+            r_wrist_y <= shoulder_y - 12.0 and
+            l_wrist_y <= ref_y + 5.0 and
+            r_wrist_y <= ref_y + 5.0
         )
+
 
         # ── Check Upright Torso ──
         if has_hips and shoulder_y != float('inf'):
@@ -171,15 +186,16 @@ class HandsOverHeadDetector:
 
         # Temporal confirmation with 0.8s grace period to tolerate camera / tracker jitter
         if gesture_detected:
-            if now - self._last_detected.get(tid, -1e9) > 0.8:
+            if tid not in self._since or (now - self._last_detected.get(tid, -1e9)) > 0.8:
                 self._since[tid] = now
             self._last_detected[tid] = now
             time_held = now - self._since[tid]
         else:
-            if now - self._last_detected.get(tid, -1e9) <= 0.8:
-                time_held = now - self._since.get(tid, now)
+            if tid in self._since and (now - self._last_detected.get(tid, -1e9)) <= 0.8:
+                time_held = now - self._since[tid]
             else:
                 self._since.pop(tid, None)
+                self._last_detected.pop(tid, None)
                 time_held = 0.0
 
         is_confirmed = gesture_detected and time_held >= self.confirm_s

@@ -239,6 +239,11 @@ class HandSOSDetector:
             if t_in and not f_closed:
                 return 2
             elif t_in and f_closed and not p_open:
+                # Progressed into thumb-tucked fist; advance to state 2 so state 3 can confirm
+                return 2
+            # [QA] open→fist directly (waving / grabbing) was counted as SOS.
+            # Only allowed when explicitly enabled, with the strict 4/4 check.
+            elif self._allow_fast_sos and self._thumb_and_fingers_closed(lm):
                 return 3
             return 1
 
@@ -530,10 +535,25 @@ class HandSOSDetector:
                 self._results = self._detector.detect(mp_image)
 
                 if self._results and self._results.hand_landmarks:
-                    return list(self._results.hand_landmarks)
+                    hands = list(self._results.hand_landmarks)
+                    # [QA] num_hands=2 and caller uses hands[0] → the chosen
+                    # hand swapped L/R (or another person's hand) between
+                    # frames, breaking the 3-step state machine. Put the hand
+                    # whose landmark-0 (wrist) is nearest the YOLO wrist first.
+                    if len(hands) > 1:
+                        wx, wy = item["wrist"]
+                        bw, bh = float(x2 - x1), float(y2 - y1)
+                        def _dist(hl):
+                            hx = x1 + hl[0].x * bw
+                            hy = y1 + hl[0].y * bh
+                            return (hx - wx) ** 2 + (hy - wy) ** 2
+                        hands.sort(key=_dist)
+                    return hands
 
-            # If elevated wrist crop missed slightly, fallback to upper-body crop
-            if bbox is not None:
+            # [QA] The upper-body fallback bypassed the elevation gate (hands
+            # resting at the waist/desk were evaluated) → only use it when
+            # the gate is disabled.
+            if bbox is not None and not self._elevation_gate_enabled:
                 bx1, by1, bx2, by2 = bbox
                 ub_box = [bx1, by1, bx2, int(by1 + 0.60 * (by2 - by1))]
                 ub_lms = self.process_crop(frame_bgr, ub_box, min_crop_h=min_crop_h)

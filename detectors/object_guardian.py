@@ -56,6 +56,16 @@ class ObjectGuardian:
         self.ignore_classes = set(
             cfg.get("ignore_classes", _default_ignore)
         )
+        # [QA] Whitelist of carry-able items. alerts/ contained theft_boat and
+        # left_potted plant — scene objects should never be guarded.
+        # Set watch_classes: [] in thresholds.yaml to disable the whitelist.
+        _default_watch = ["backpack", "handbag", "suitcase", "laptop",
+                          "cell phone", "umbrella"]
+        self.watch_classes = set(cfg.get("watch_classes", _default_watch) or [])
+        # [QA] time-based (FPS-independent) missing/expiry thresholds
+        self.missing_confirm_seconds = float(cfg.get("missing_confirm_seconds", 2.0))
+        self.track_max_missed_seconds = float(cfg.get("track_max_missed_seconds", 6.0))
+        self._last_now = time.time()
 
         # State tracking: track_id -> dict
         self._tracked: Dict[int, dict] = {}
@@ -149,7 +159,10 @@ class ObjectGuardian:
     # ─── Snapshot ────────────────────────────────────────────────────────────
 
     def _save_snapshot(self, frame, label: str) -> Optional[str]:
-        save_local = os.getenv("SAVE_LOCAL_SNAPSHOTS", "false").lower() == "true"
+        save_local = self.cfg.get("save_local_snapshots", True)
+        if os.getenv("SAVE_LOCAL_SNAPSHOTS"):
+            save_local = os.getenv("SAVE_LOCAL_SNAPSHOTS", "true").lower() in ("true", "1", "yes")
+
         if not save_local:
             try:
                 from utils import frame_to_base64
@@ -161,6 +174,13 @@ class ObjectGuardian:
             ts   = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             path = self.alert_dir / f"{label}_{ts}.jpg"
             cv2.imwrite(str(path), frame)
+
+            # Record in logs/alerts.log
+            log_dir = Path("logs")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "alerts.log", "a", encoding="utf-8") as lf:
+                lf.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ALERT: OBJECT GUARDIAN | file={path.name} | label={label}\n")
+            print(f"  [SNAPSHOT SAVED] {path} (logged to logs/alerts.log)")
             return str(path)
         except Exception as e:
             logger.error(f"Snapshot save error: {e}")
@@ -184,6 +204,7 @@ class ObjectGuardian:
         """
         alerts = []
         now = t_sec if t_sec is not None else time.time()
+        self._last_now = now
         seen_track_ids = set()
 
         # ── 1. ประมวลผลวัตถุที่ตรวจจับพบในเฟรม ──
@@ -196,6 +217,8 @@ class ObjectGuardian:
             class_name = obj.get("class_name", "object")
 
             if class_name in self.ignore_classes:
+                continue
+            if self.watch_classes and class_name not in self.watch_classes:
                 continue
 
             tid = self._match_track(class_name, bbox)
@@ -316,10 +339,26 @@ class ObjectGuardian:
             t = self._tracked[tid]
             t["missed"] += 1
 
+            missing_s = now - t.get("last_seen", now)
+
             # ถ้าวัตถุเคยมีเจ้าของและยังไม่เคยส่ง alert
             if t.get("owner_tid") is not None and not t["alert_sent"]:
-                # เมื่อหายไปต่อเนื่องอย่างน้อย missing_confirm_frames เพื่อกรองเฟรมกะพริบ
-                if t["missed"] >= self.missing_confirm_frames:
+                # [QA] must be missing for N frames AND N seconds (FPS-independent)
+                occluded = False
+                if t["missed"] >= self.missing_confirm_frames and missing_s >= self.missing_confirm_seconds:
+                    # [QA] A passer-by standing in front of the object makes it
+                    # "disappear" → used to be reported as THEFT. If someone's
+                    # bbox still covers the object's location, treat it as
+                    # occlusion and wait (up to theft_seconds) before deciding.
+                    ox = (t["bbox"][0] + t["bbox"][2]) / 2.0
+                    oy = (t["bbox"][1] + t["bbox"][3]) / 2.0
+                    occluded = any(
+                        p.get("bbox") and p["bbox"][0] <= ox <= p["bbox"][2] and p["bbox"][1] <= oy <= p["bbox"][3]
+                        for p in people
+                    ) and missing_s < self.theft_seconds
+                if (t["missed"] >= self.missing_confirm_frames
+                        and missing_s >= self.missing_confirm_seconds
+                        and not occluded):
                     # ตรวจสอบคนใกล้ชิดในเฟรมปัจจุบันที่ตำแหน่งของวัตถุ
                     nearby_curr = self._find_nearby_people(t["bbox"], people)
                     curr_tids = {p[0].get("track_id") for p in nearby_curr if p[0].get("track_id") is not None}
@@ -371,7 +410,7 @@ class ObjectGuardian:
                             )
 
             # ลบ Track ที่หายไปนานเกินกำหนดออกจากหน่วยความจำ
-            if t["missed"] > self.track_max_missed:
+            if t["missed"] > self.track_max_missed and missing_s > self.track_max_missed_seconds:
                 del self._tracked[tid]
 
         return alerts
@@ -397,7 +436,7 @@ class ObjectGuardian:
             label = f"{t['class_name']} #{tid} [{owner_str}] {state}"
 
             if state == "UNATTENDED" and t.get("owner_left_at"):
-                unattended_s = int(time.time() - t["owner_left_at"])
+                unattended_s = int(self._last_now - t["owner_left_at"])
                 label += f" {unattended_s}s/{int(self.left_seconds)}s"
 
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
