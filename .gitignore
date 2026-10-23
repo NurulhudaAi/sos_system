@@ -24,6 +24,9 @@ venv/
 # Logs & snapshots (generated at runtime)
 logs/
 alerts/
+eval/**/snapshots/
+eval/**/*.jpg
+eval/**/*.png
 
 # Video files (too large for git)
 videos/*

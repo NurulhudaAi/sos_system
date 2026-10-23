@@ -33,6 +33,9 @@ from datetime import datetime, timezone
 
 
 def _are_both_arms_over_head(kps, conf_thresh=0.25):
+    """Checks if both arms are genuinely raised overhead in a wide V-shape (Pose SOS).
+    Requires wrists to be spread apart, preventing Hand SOS or holding objects from being suppressed.
+    """
     if len(kps) < 11:
         return False
     l_wr, r_wr = kps[9], kps[10]
@@ -40,13 +43,27 @@ def _are_both_arms_over_head(kps, conf_thresh=0.25):
     l_sh, r_sh = kps[5], kps[6]
     if float(l_wr[2]) < conf_thresh or float(r_wr[2]) < conf_thresh:
         return False
-    if float(nose[2]) >= conf_thresh:
-        head_ref = float(nose[1])
-    elif float(l_sh[2]) >= conf_thresh and float(r_sh[2]) >= conf_thresh:
-        head_ref = min(float(l_sh[1]), float(r_sh[1]))
-    else:
+    if float(l_sh[2]) < conf_thresh or float(r_sh[2]) < conf_thresh:
         return False
-    return (float(l_wr[1]) <= head_ref + 15) and (float(r_wr[1]) <= head_ref + 15)
+
+    shoulder_y = min(float(l_sh[1]), float(r_sh[1]))
+    shoulder_w = abs(float(l_sh[0]) - float(r_sh[0]))
+    wrist_sep = abs(float(l_wr[0]) - float(r_wr[0]))
+
+    # Must have genuine V-shape separation (arms spread apart)
+    min_sep = max(18.0, 0.55 * shoulder_w)
+    if wrist_sep < min_sep:
+        return False
+
+    head_ref = float(nose[1]) if float(nose[2]) >= conf_thresh else (shoulder_y - 15.0)
+
+    # Both wrists must be near/above head AND clearly above shoulders
+    return (
+        float(l_wr[1]) <= head_ref + 5.0
+        and float(r_wr[1]) <= head_ref + 5.0
+        and float(l_wr[1]) <= shoulder_y - 12.0
+        and float(r_wr[1]) <= shoulder_y - 12.0
+    )
 
 
 def save_debug_snapshot(frame, event_type, video_stem, ts_sec, tid, bbox=None, extra_info="", send_db=True):

@@ -26,7 +26,7 @@ danger:
   immobile_seconds: 5
   record_threshold_level: 2
 fall:
-  bbox_ratio_thresh: 1.2
+  bbox_ratio_thresh: 1.4   # [QA] was 1.2 — arms out / sitting stretched passed
   confirm_seconds: 4.0
   cooldown_seconds: 120
   critical_seconds: 30.0
@@ -41,7 +41,7 @@ fall:
   motion_thresh_norm: 0.02
   recover_seconds: 5.0
   spike_thresh_norm: 0.18
-  min_model_conf: 0.25
+  min_model_conf: 0.5      # [QA] was 0.25 — model shortcut fired on weak calls
   model_confirm_seconds: 3.0
   fall_pose_iou_thresh: 0.3
   fall_pose_containment_fallback: true
@@ -75,17 +75,17 @@ hand_sos:
   min_hand_bbox_area_norm: 0.002
   min_kp_conf: 0.35
   min_tracking_confidence: 0.25
-  temporal_threshold: 0.20
+  temporal_threshold: 0.30   # [QA] was 0.20 (=2 hits/10) → now 3 hits
   temporal_window: 10
   thumb_in_ratio: 0.75
-  fingers_closed_ratio: 1.20
-  fingers_closed_min_count: 3
-  allow_fast_sos: false
+  fingers_closed_ratio: 1.35
+  fingers_closed_min_count: 2
+  allow_fast_sos: true
   min_track_age_seconds: 1.0
   # [FIX-FP] temporal persistence ลด false positive
   fingers_closed_strict_ratio: 1.20
   fast_sos_min_hand_span: 0.04
-  min_consec_sos_frames: 1
+  min_consec_sos_frames: 2   # [QA] was 1
   # [PRODUCTION FINE-TUNING]
   elevation_gate_enabled: true
   wrist_crop_enabled: true
@@ -109,6 +109,10 @@ object_guardian:
   proximity_norm: 0.20
   track_iou_threshold: 0.15
   track_max_missed: 15
+  # [QA] FPS-independent timing + only guard carry-able items
+  missing_confirm_seconds: 2.0
+  track_max_missed_seconds: 6.0
+  watch_classes: [backpack, handbag, suitcase, laptop, cell phone, umbrella]
 record_only_dangerous: true 
 save_local_snapshots: true
 streaming:

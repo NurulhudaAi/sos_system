@@ -1,0 +1,92 @@
+{
+  "test_1_latency": {
+    "clahe": {
+      "avg_ms": 8.53,
+      "p95_ms": 11.82
+    },
+    "server_inference": {
+      "avg_ms": 268.44,
+      "p95_ms": 291.08
+    },
+    "hungarian_tracker": {
+      "avg_ms": 0.09,
+      "p95_ms": 0.18
+    },
+    "fall_detector": {
+      "avg_ms": 0.33,
+      "p95_ms": 0.53
+    },
+    "hand_sos_detector": {
+      "avg_ms": 20.94,
+      "p95_ms": 58.13
+    },
+    "pose_sos_detector": {
+      "avg_ms": 0.04,
+      "p95_ms": 0.07
+    },
+    "total_pipeline": {
+      "avg_ms": 300.2,
+      "p95_ms": 340.41
+    },
+    "effective_fps": 3.3
+  },
+  "test_2_memory": {
+    "snapshots": [
+      {
+        "frame": 0,
+        "client_mem_mb": 306.0,
+        "server_mem_mb": 326.8,
+        "elapsed_s": 0.3
+      },
+      {
+        "frame": 50,
+        "client_mem_mb": 295.0,
+        "server_mem_mb": 331.6,
+        "elapsed_s": 15.3
+      },
+      {
+        "frame": 100,
+        "client_mem_mb": 294.1,
+        "server_mem_mb": 335.9,
+        "elapsed_s": 31.0
+      },
+      {
+        "frame": 150,
+        "client_mem_mb": 294.0,
+        "server_mem_mb": 333.9,
+        "elapsed_s": 45.7
+      },
+      {
+        "frame": 200,
+        "client_mem_mb": 220.7,
+        "server_mem_mb": 333.2,
+        "elapsed_s": 60.5
+      },
+      {
+        "frame": 300,
+        "client_mem_mb": 216.3,
+        "server_mem_mb": 332.6,
+        "elapsed_s": 91.6
+      }
+    ],
+    "client_delta_mb": -89.7,
+    "server_delta_mb": 5.8,
+    "is_leak_free": true
+  },
+  "test_3_stream_reader": {
+    "received_frames": 60,
+    "dropped_stale": 1135,
+    "reconnect_count": 1,
+    "post_reconnect_frames": 20,
+    "passed": true
+  },
+  "test_4_concurrency": {
+    "num_streams": 4,
+    "total_requests": 120,
+    "error_count": 0,
+    "avg_latency_ms": 841.65,
+    "p95_latency_ms": 912.77,
+    "throughput_rps": 4.7,
+    "passed": true
+  }
+}

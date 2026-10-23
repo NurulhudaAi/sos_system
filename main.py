@@ -30,6 +30,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from math import ceil
 import numpy as np, multiprocessing, logging
+from typing import Optional, Dict, Any  # [QA] was missing → NameError on Python < 3.14
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -77,8 +78,9 @@ from detectors.hands_over_head_detector import HandsOverHeadDetector
 from detectors.object_guardian          import ObjectGuardian
 from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
 from help_request_dispatcher     import HelpRequestDispatcher
-from utils                       import preprocess, Visualizer, add_sos_badge, create_bbox_snapshot_base64
+from utils                       import preprocess, Visualizer, add_sos_badge, create_bbox_snapshot_base64, save_annotated_snapshot
 from vlc_stream                  import VLCStreamManager
+from stream_reader               import LatestFrameReader
 import database as db_module
 from database                    import insert_incident, insert_object_event  # [W6] ลบ _get_db ที่ไม่ใช้
 
@@ -122,88 +124,8 @@ class BoxesWrapper:
 class KeypointsWrapper:
     def __init__(self,data): self.data=[_W(d) for d in data] if data else None
 
-class SimpleTracker:
-    """[F1] Two-pass IOU + centroid-distance tracker.
+from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator
 
-    Root cause of "fall sometimes not detected": pure IOU matching
-    (thresh=0.3) fails exactly when it matters most — a person falling
-    changes bbox aspect ratio drastically frame-to-frame (tall/narrow →
-    wide/short) which tanks IOU between consecutive frames, especially
-    with any RTSP frame jitter/drop. When IOU dips below threshold the
-    tracker silently assigns a NEW track_id to the same physical
-    person, which resets ALL of FallDetector's accumulated per-track
-    state (_since, _ground_time, _lying_geom_since, ...) right as the
-    fall is happening — so confirm_seconds/geometry_confirm_seconds
-    never gets to accumulate and no alert fires.
-
-    Fix: after the normal IOU pass, do a second pass for any det/track
-    still unmatched — match by centroid distance (normalized by frame
-    diagonal) instead. A person's bbox center doesn't jump far in one
-    frame at 10fps even while its shape changes a lot, so this recovers
-    the correct identity through a fall without loosening IOU matching
-    for the general (non-falling) case, which stays exactly as before.
-    """
-    def __init__(self, frame_w=1920, frame_h=1080, max_lost=30):
-        self.next_id=0; self.tracks={}
-        self._diag = float((frame_w**2 + frame_h**2) ** 0.5)
-        self.max_lost = max_lost
-
-    def _iou(self,a,b):
-        x1=max(a[0],b[0]);y1=max(a[1],b[1]);x2=min(a[2],b[2]);y2=min(a[3],b[3])
-        w=max(0,x2-x1);h=max(0,y2-y1);inter=w*h
-        aa=max(1e-6,(a[2]-a[0])*(a[3]-a[1]));ab=max(1e-6,(b[2]-b[0])*(b[3]-b[1]))
-        return inter/(aa+ab-inter) if (aa+ab-inter)>0 else 0.0
-
-    def _center(self, box):
-        return ((box[0]+box[2])/2.0, (box[1]+box[3])/2.0)
-
-    def _center_dist_norm(self, a, b):
-        ax, ay = self._center(a); bx, by = self._center(b)
-        d = ((ax-bx)**2 + (ay-by)**2) ** 0.5
-        return d / self._diag if self._diag else 1.0
-
-    def update(self,dets):
-        used=[]
-        unmatched_dets = []
-
-        # ── Pass 1: IOU matching (unchanged — this is the normal case) ──
-        for det in dets:
-            best_id=None;best_iou=0.0
-            for tid,t in self.tracks.items():
-                iou=self._iou(det["bbox"],t["bbox"])
-                if iou>best_iou: best_iou=iou;best_id=tid
-            if best_iou>=TRACKER_IOU_THRESH and best_id not in used:
-                det["track_id"]=best_id;self.tracks[best_id].update(bbox=det["bbox"],lost=0);used.append(best_id)
-            else:
-                unmatched_dets.append(det)
-
-        # ── Pass 2: [F1] centroid-distance fallback for dets IOU missed.
-        # Only matches against tracks not already claimed this frame, so
-        # this never steals an identity IOU already correctly assigned —
-        # it only rescues the "shape changed too fast for IOU" case.
-        for det in unmatched_dets:
-            best_id=None;best_dist=TRACKER_CENTER_DIST_NORM
-            for tid,t in self.tracks.items():
-                if tid in used:
-                    continue
-                dist=self._center_dist_norm(det["bbox"],t["bbox"])
-                if dist<best_dist: best_dist=dist;best_id=tid
-            if best_id is not None:
-                det["track_id"]=best_id;self.tracks[best_id].update(bbox=det["bbox"],lost=0);used.append(best_id)
-            else:
-                tid=self.next_id;self.next_id+=1
-                det["track_id"]=tid;self.tracks[tid]={"bbox":det["bbox"],"lost":0};used.append(tid)
-
-        tid_set={d["track_id"] for d in dets}
-        for tid in list(self.tracks):
-            if tid not in tid_set:
-                self.tracks[tid]["lost"]+=1
-                if self.tracks[tid]["lost"]>self.max_lost: del self.tracks[tid]
-        return dets
-
-    def cleanup_track(self, tid: int):
-        """[W2] cleanup track state เพื่อป้องกัน memory leak"""
-        self.tracks.pop(tid, None)
 
 def _api(endpoint, frame, timeout=5):
     _,buf=cv2.imencode(".jpg",frame,[cv2.IMWRITE_JPEG_QUALITY,80])
@@ -214,6 +136,9 @@ def _api(endpoint, frame, timeout=5):
     return {}
 
 def _are_both_arms_over_head(kps, conf_thresh=0.25):
+    """Checks if both arms are genuinely raised overhead in a wide V-shape (Pose SOS).
+    Requires wrists to be spread apart, preventing Hand SOS or holding objects from being suppressed.
+    """
     if len(kps) < 11:
         return False
     l_wr, r_wr = kps[9], kps[10]
@@ -221,16 +146,33 @@ def _are_both_arms_over_head(kps, conf_thresh=0.25):
     l_sh, r_sh = kps[5], kps[6]
     if float(l_wr[2]) < conf_thresh or float(r_wr[2]) < conf_thresh:
         return False
-    if float(nose[2]) >= conf_thresh:
-        head_ref = float(nose[1])
-    elif float(l_sh[2]) >= conf_thresh and float(r_sh[2]) >= conf_thresh:
-        head_ref = min(float(l_sh[1]), float(r_sh[1]))
-    else:
+    if float(l_sh[2]) < conf_thresh or float(r_sh[2]) < conf_thresh:
         return False
-    return (float(l_wr[1]) <= head_ref + 15) and (float(r_wr[1]) <= head_ref + 15)
+
+    shoulder_y = min(float(l_sh[1]), float(r_sh[1]))
+    shoulder_w = abs(float(l_sh[0]) - float(r_sh[0]))
+    wrist_sep = abs(float(l_wr[0]) - float(r_wr[0]))
+
+    # Must have genuine V-shape separation (arms spread apart)
+    min_sep = max(18.0, 0.55 * shoulder_w)
+    if wrist_sep < min_sep:
+        return False
+
+    head_ref = float(nose[1]) if float(nose[2]) >= conf_thresh else (shoulder_y - 15.0)
+
+    # Both wrists must be near/above head AND clearly above shoulders
+    return (
+        float(l_wr[1]) <= head_ref + 5.0
+        and float(r_wr[1]) <= head_ref + 5.0
+        and float(l_wr[1]) <= shoulder_y - 12.0
+        and float(r_wr[1]) <= shoulder_y - 12.0
+    )
+
 
 
 def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=False, loop:bool=False, signal_config:Optional[Dict[str, Any]]=None):
+    if isinstance(src, str):
+        src = src.strip().strip("'\"").lstrip("=").strip().strip("'\"")
     hand_cfg = cfg.get("hand_sos", {})
     source_p = Path(src)
     is_file = source_p.is_file()
@@ -261,16 +203,24 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
         else:
             print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
 
-    if isinstance(url, str) and url.startswith("rtsp://"):
-        os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
-        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+    # [QA-P0-1] Live sources (RTSP / HTTP / VLC) use a background reader
+    # that keeps only the newest frame → no buffer build-up / lag / smear.
+    # Video files are read sequentially (every frame matters for eval).
+    is_live = not (is_file and not vlc_mgr)
+    cap = None; reader = None; file_fps = 25.0; file_frame_idx = 0
+    if is_live:
+        reader = LatestFrameReader(url, name=source_id[-30:])
+        if not reader.start():
+            print(f"[cap] Cannot open: {url}")
+            if vlc_mgr: vlc_mgr.stop()
+            return
     else:
         cap = cv2.VideoCapture(url)
-
-    if not cap.isOpened():
-        print(f"[cap] Cannot open: {url}")
-        if vlc_mgr: vlc_mgr.stop(); return
+        if not cap.isOpened():
+            print(f"[cap] Cannot open: {url}")
+            return
+        file_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        if file_fps <= 1 or file_fps > 240: file_fps = 25.0
 
     print(f"[{source_id[-30:]}] Connected | location={location or '?'} | cam_id={cam_id or 'default'}")
 
@@ -282,6 +232,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     active_cam_id = cam_id or location or "default"
     zones   =ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=active_cam_id, db=db_module)
     viz     =Visualizer()
+    spatial_dedup = SpatialAlertDeduplicator(radius_norm=0.12, default_cooldown_sec=30.0)
 
     # ── Signal Config: Incidents Enabled/Disabled from DB (cctv_cameras) ─────
     if signal_config is None and db_module:
@@ -305,6 +256,9 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
     alert_cd     = GEN.get("alert_cooldown_seconds", cfg.get("fall",{}).get("cooldown_seconds",120))
     snapshot_dir = str(ROOT / "logs" / "snapshots")
+    save_local_snapshots = bool(cfg.get("save_local_snapshots", True))
+    if os.getenv("SAVE_LOCAL_SNAPSHOTS"):
+        save_local_snapshots = os.getenv("SAVE_LOCAL_SNAPSHOTS").lower() in ("true", "1", "yes")
 
     webhook_url = os.getenv("HELP_WEBHOOK_URL")
     if not webhook_url:
@@ -348,6 +302,12 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     _fall_last_event_ts = {}  # per-tid: timestamp of last confirmed fall alert
     FALL_HYSTERESIS_FACTOR = cfg.get("fall", {}).get("fall_hysteresis_factor", 2.0)
     FALL_CONFIRM_S = cfg.get("fall", {}).get("confirm_seconds", 4.0)
+    # [QA-P0-5] dedup window was only confirm_s*2 (=8s) → re-alerted every ~8s
+    # while a person lay still with a flickering is_fallen. Honor cooldown.
+    FALL_COOLDOWN_S = float(cfg.get("fall", {}).get("cooldown_seconds", 120))
+    FALL_DEBUG_CSV = os.getenv("FALL_DEBUG_CSV", "").lower() in ("1", "true", "yes")
+    _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    last_stats_ts = time.time(); frames_done = 0
     s_states=defaultdict(lambda:{"angle_hist":deque(maxlen=TRIG_FRAMES),
                                   "motion_hist":deque(maxlen=TRIG_FRAMES),
                                   "triggered":False,"trigger_time":None,"frames_in_trigger":0})
@@ -357,56 +317,51 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     n=0
     try:
         while True:
-            ret,raw=cap.read()
-            if not ret:
-                if is_file and not vlc_mgr:
+            if is_live:
+                ret, raw, frame_ts = reader.read(timeout=5.0)
+                if not ret:
+                    retry_count += 1
+                    print(f" [{source_id[-30:]}] No frame for 5s (stall {retry_count}/{max_retries}) — reader is reconnecting")
+                    if vlc_mgr and not vlc_mgr.is_alive():
+                        print(" [VLC] Process died — restarting ...")
+                        try:
+                            url = vlc_mgr.restart()
+                            reader.reopen(url)
+                        except Exception as restart_err:
+                            print(f"❌ [VLC] Restart failed: {restart_err}")
+                    if retry_count > max_retries:
+                        print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
+                        break
+                    continue
+                retry_count = 0
+                n += 1  # reader already drops stale frames → no SKIP for live
+            else:
+                ret, raw = cap.read()
+                if not ret:
                     if loop:
                         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         continue
-                    else:
-                        print(f"[{source_id[-30:]}] Video file reached end of stream — completed.")
-                        break
-
-                retry_count += 1
-                if retry_count > max_retries:
-                    print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
+                    print(f"[{source_id[-30:]}] Video file reached end of stream — completed.")
                     break
-                # VLC process died — restart it
-                if vlc_mgr and not vlc_mgr.is_alive():
-                    print(f" [VLC] Process died — restarting (attempt {retry_count}/{max_retries}) ...")
-                    try:
-                        cap.release()
-                        url = vlc_mgr.restart()
-                        time.sleep(3)
-                        cap = cv2.VideoCapture(url)
-                        if not cap.isOpened():
-                            print(f"[cap] Still cannot open after VLC restart: {url}")
-                            time.sleep(2)
-                            continue
-                        print(f"[cap] Reconnected after VLC restart")
-                        retry_count = 0
-                    except Exception as restart_err:
-                        print(f"❌ [VLC] Restart failed: {restart_err}")
-                        time.sleep(2)
-                        continue
-                else:
-                    # Stream gap during loop transition — brief retry
-                    cap.release()
-                    time.sleep(1)
-                    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG if isinstance(url, str) and url.startswith("rtsp://") else cv2.CAP_ANY)
-                    if isinstance(url, str) and url.startswith("rtsp://"):
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-                    if cap.isOpened():
-                        retry_count = 0
-                continue
-            retry_count = 0  # successful read — reset retry counter
-            n+=1
-            if n%max(1,SKIP)!=0: continue
+                file_frame_idx += 1
+                n += 1
+                if n % max(1, SKIP) != 0: continue
+                # [QA-P0-4] video time, monotonic across loops
+                frame_ts = file_frame_idx / file_fps
 
             frame=preprocess(raw,W,H)
             h,w=frame.shape[:2]
             clean_frame=frame.copy()
-            zones.draw(frame)
+            # [QA-P0-3] zones are drawn AFTER detection (was drawn onto the
+            # frame sent to YOLO/MediaPipe, corrupting keypoints/hands)
+
+            frames_done += 1
+            if is_live and time.time() - last_stats_ts >= 30.0:
+                el = time.time() - last_stats_ts
+                print(f"[{source_id[-30:]}] proc {frames_done/el:.1f} fps | "
+                      f"dropped {reader.dropped} | reconnects {reader.reconnects} | "
+                      f"latency {time.time()-frame_ts:.2f}s")
+                last_stats_ts = time.time(); frames_done = 0
 
             rgb=cv2.cvtColor(frame,cv2.COLOR_BGR2RGB)
             # [RTSP FIX] CLAHE preprocessing — applied per-person crop below
@@ -414,7 +369,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
             # hands in a 1920×1080 RTSP frame; per-person crop + resize ≥256px
             # is required — same approach as eval_harness_full.py)
             lab=cv2.cvtColor(frame,cv2.COLOR_BGR2LAB)
-            lab[:,:,0]=cv2.createCLAHE(clipLimit=2.0,tileGridSize=(8,8)).apply(lab[:,:,0])
+            lab[:,:,0]=_clahe.apply(lab[:,:,0])
             frame_clahe=cv2.cvtColor(lab,cv2.COLOR_LAB2BGR)
 
             # Periodic check for dynamic signal_config updates in DB (every 10s)
@@ -470,7 +425,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
             # ── Object Guardian (Gated by DB signal_config) ──────────────
             if obj_active:
-                for oa in obj_grd.update(frame, odets, assigned, source_id=source_id, location=location):
+                for oa in obj_grd.update(clean_frame, odets, assigned, source_id=source_id, location=location, t_sec=frame_ts):
                     obbox = oa.get("bbox") or [0, 0, 0, 0]
                     ocx, ocy = (obbox[0] + obbox[2]) / 2 / max(1, w), (obbox[1] + obbox[3]) / 2 / max(1, h)
                     if not zones.in_zone(ocx, ocy, detector_type="object_guardian"):
@@ -516,6 +471,13 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     hand_recent_sos.pop(tid, None)
 
             if boxes and kpts and kpts.data:
+                all_frame_tracks = [
+                    {
+                        "track_id": int(boxes.id[j].cpu()) if boxes.id else j,
+                        "bbox": boxes.xyxy[j].cpu().numpy().tolist(),
+                    }
+                    for j in range(len(boxes.xyxy))
+                ]
                 for i in range(len(boxes.xyxy)):
                     bbox=boxes.xyxy[i].cpu().numpy().tolist()
                     conf=float(boxes.conf[i].cpu())
@@ -532,7 +494,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     if fall_active and in_fall_zone:
                         fr=fall_d.process(tid,kp,bbox,h,w,
                                            posture_class=posture_class,
-                                           posture_conf=posture_conf)  # [F2]
+                                           posture_conf=posture_conf,  # [F2]
+                                           timestamp=frame_ts)          # [QA-P0-4]
                     else:
                         fr={"is_fallen":False, "danger_lying":False, "is_critical":False}
 
@@ -550,17 +513,17 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             if st["motion_hist"][-2]>mth*3 and st["motion_hist"][-1]<mth and angle>=LYING_ANG: trig=True
                         if sum(1 for a in st["angle_hist"] if a>=LYING_ANG)>=TRIG_FRAMES: trig=True
                         if trig and not st["triggered"]:
-                            st.update(triggered=True,trigger_time=time.time(),frames_in_trigger=0)
+                            st.update(triggered=True,trigger_time=frame_ts,frames_in_trigger=0)
                         if st["triggered"]:
                             st["frames_in_trigger"]+=1
                             if fr.get("recovered_quickly") or abs(avn)>mth*4:
                                 st.update(triggered=False,trigger_time=None,frames_in_trigger=0)
-                            elif st["trigger_time"] and (time.time()-st["trigger_time"])>CONF_WIN:
+                            elif st["trigger_time"] and (frame_ts-st["trigger_time"])>CONF_WIN:
                                 st.update(triggered=False,trigger_time=None,frames_in_trigger=0)
                     except Exception: pass
 
                     # ── Hand SOS (Zone-gated) ────────────────────────────
-                    now_t = time.time()
+                    now_t = frame_ts  # [QA-P0-4] frame time, not processing time
                     prev_c_info = track_prev_center.get(tid)
                     track_prev_center[tid] = (cx, cy, now_t)
                     vel_px_s = 0.0
@@ -644,9 +607,23 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         if sos_confirmed and not fall_ev.get(tid) and not is_lying and not recently_fallen:
                             can_emit = (now_t - _hand_last_event_ts.get(tid, -1e9)) >= hand_cooldown_seconds
                             if can_emit and not hand_ev.get(tid):
-                                # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
-                                b64_snap = create_bbox_snapshot_base64(
-                                    clean_frame, bbox=bbox, label=f"HAND SOS [tid={tid}]", color=(0, 255, 0), coord_size=(w, h)
+                                # Generate Base64 snapshot and save local image/JSON metadata/log
+                                b64_snap, snap_file = save_annotated_snapshot(
+                                    clean_frame,
+                                    event_type="hand_sos",
+                                    bbox=bbox,
+                                    label=f"HAND SOS [tid={tid}]",
+                                    color=(0, 255, 0),
+                                    coord_size=(w, h),
+                                    snapshot_dir=snapshot_dir,
+                                    save_local=save_local_snapshots,
+                                    extra_meta={
+                                        "source_id": source_id,
+                                        "track_id": tid,
+                                        "confidence": conf,
+                                        "location": location,
+                                    },
+                                    all_tracks=all_frame_tracks,
                                 )
                                 raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                                 try:
@@ -663,16 +640,18 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                             "track_id":        tid,
                                             "snapshotUrl":     b64_snap,
                                             "snapshot_base64": raw_b64,
+                                            "imagePath":       snap_file or b64_snap,
+                                            "snapshot_file":   snap_file,
                                             "gesture":         "hand_sos",
                                             "bbox":            [int(v) for v in bbox],
                                             "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
                                             "frame_size":      [w, h],
                                         },
                                     )
-                                    print(f"  [DB INSERTED] Hand SOS uuid={ev_uuid} (base64, no banner)")
+                                    print(f"  [DB INSERTED] Hand SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
                                 except Exception as e:
                                     print(f"[DB] hand_sos insert error: {e}")
-                                _hand_last_event_ts[tid] = time.time()
+                                _hand_last_event_ts[tid] = now_t
                                 hand_states[tid] = 0
                                 hand_consec3[tid] = 0
                                 hand_recent_sos[tid].clear()
@@ -684,12 +663,27 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     # ── Hands Over Head SOS (Pose SOS) ───────────────────
                     in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
                     if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
-                        head_res = head_d.process(tid, kp, h, w, timestamp=time.time())
+                        head_res = head_d.process(tid, kp, h, w, timestamp=now_t)
                         can_emit_pose = (now_t - _pose_last_event_ts.get(tid, -1e9)) >= pose_cooldown_seconds
-                        if head_res.get("triggered") and can_emit_pose:
-                            # Generate in-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
-                            b64_snap = create_bbox_snapshot_base64(
-                                clean_frame, bbox=bbox, label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s", color=(0, 165, 255), coord_size=(w, h)
+                        is_spatial_pose_dup = spatial_dedup.should_suppress("pose_sos", cx, cy, now_t, cooldown_sec=pose_cooldown_seconds)
+                        if head_res.get("triggered") and can_emit_pose and not is_spatial_pose_dup:
+                            b64_snap, snap_file = save_annotated_snapshot(
+                                clean_frame,
+                                event_type="pose_sos",
+                                bbox=bbox,
+                                label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s",
+                                color=(0, 165, 255),
+                                coord_size=(w, h),
+                                snapshot_dir=snapshot_dir,
+                                save_local=save_local_snapshots,
+                                extra_meta={
+                                    "source_id": source_id,
+                                    "track_id": tid,
+                                    "confidence": conf,
+                                    "location": location,
+                                    "time_held": head_res.get("time_held", 0.0),
+                                },
+                                all_tracks=all_frame_tracks,
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                             try:
@@ -706,6 +700,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "track_id":        tid,
                                         "snapshotUrl":     b64_snap,
                                         "snapshot_base64": raw_b64,
+                                        "imagePath":       snap_file or b64_snap,
+                                        "snapshot_file":   snap_file,
                                         "gesture":         "pose_sos",
                                         "time_held":       head_res.get("time_held", 0.0),
                                         "bbox":            [int(v) for v in bbox],
@@ -713,10 +709,10 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "frame_size":      [w, h],
                                     },
                                 )
-                                print(f"  [DB INSERTED] Pose SOS uuid={ev_uuid} (base64, no banner)")
+                                print(f"  [DB INSERTED] Pose SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
                             except Exception as e:
                                 print(f"[DB] pose_sos insert error: {e}")
-                            _pose_last_event_ts[tid] = time.time()
+                            _pose_last_event_ts[tid] = now_t
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
@@ -733,7 +729,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                 fr.get("model_confident_lying"), fr.get("geometry_time", 0),
                                 fr.get("used_stale_angle"),
                             )
-                        try:
+                        if FALL_DEBUG_CSV:
+                          try:
                             from pipeline import LOG_DIR
                             lp=LOG_DIR/"fall_vels.csv"
                             if not lp.exists():
@@ -747,7 +744,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                          f"{int(fr.get('is_critical',0))},{fr.get('spike_time')},"
                                          f"{fr.get('ground_time')},{fr.get('time_to_ground')},"
                                          f"{fr.get('time_lying')},{int(fr.get('danger_lying',0))}\n")
-                        except Exception: pass
+                          except Exception: pass
 
                     # ── Critical Fall & Confirmed Fall ────────────────────
                     esc=fr.get("danger_lying") and not fr.get("recovered_quickly")
@@ -760,17 +757,18 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         # confirm_seconds * hysteresis_factor), treat it as
                         # the SAME event — don't dispatch a new alert.
                         prev_ts = _fall_last_event_ts.get(tid)
-                        dedup_window = FALL_CONFIRM_S * FALL_HYSTERESIS_FACTOR
+                        dedup_window = max(FALL_CONFIRM_S * FALL_HYSTERESIS_FACTOR, FALL_COOLDOWN_S)
                         is_flap = bool(
                             prev_ts is not None
-                            and (time.time() - prev_ts) < dedup_window
+                            and (now_t - prev_ts) < dedup_window
                         )
+                        is_spatial_dup = spatial_dedup.should_suppress("fall", cx, cy, now_t, cooldown_sec=dedup_window)
 
-                        if is_flap:
+                        if is_flap or is_spatial_dup:
                             logger.debug(
-                                "[FALL-DEDUP] tid=%d: suppressed flapping alert "
-                                "(%.1fs since last event < %.1fs dedup window)",
-                                tid, time.time() - prev_ts, dedup_window,
+                                "[FALL-DEDUP] tid=%d: suppressed flapping/spatial duplicate alert "
+                                "(is_flap=%s, is_spatial=%s)",
+                                tid, is_flap, is_spatial_dup,
                             )
                             # Keep fall_ev[tid]=True so we don't re-trigger
                             fall_ev[tid] = True
@@ -784,9 +782,21 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             if esc: ex["auto_escalated_immobile"] = True
                             lv, ln, flags = disp._assess_alert_level("fall", ex)
 
-                            # In-memory Base64 snapshot with bounding box only (no banner, no jpeg to disk)
-                            b64_snap = create_bbox_snapshot_base64(
-                                clean_frame, bbox=bbox, label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg", color=(0, 0, 255), coord_size=(w, h)
+                            b64_snap, snap_file = save_annotated_snapshot(
+                                clean_frame,
+                                event_type="fall",
+                                bbox=bbox,
+                                label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg",
+                                color=(0, 0, 255),
+                                coord_size=(w, h),
+                                snapshot_dir=snapshot_dir,
+                                save_local=save_local_snapshots,
+                                extra_meta={
+                                    **ex,
+                                    "severity_name": ln,
+                                    "confidence": conf,
+                                },
+                                all_tracks=all_frame_tracks,
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                             try:
@@ -805,27 +815,32 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "track_id":        tid,
                                         "snapshotUrl":     b64_snap,
                                         "snapshot_base64": raw_b64,
+                                        "imagePath":       snap_file or b64_snap,
+                                        "snapshot_file":   snap_file,
                                         "bbox":            [int(v) for v in bbox],
                                         "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
                                         "frame_size":      [w, h],
                                     }
                                 )
-                                print(f"  [DB INSERTED] Fall uuid={ev_uuid} (base64, no banner)")
+                                print(f"  [DB INSERTED] Fall uuid={ev_uuid} | file={snap_file or 'base64'}")
                             except Exception as e:
                                 print(f"[DB] fall insert error: {e}")
-                            _fall_last_event_ts[tid] = time.time()
+                            _fall_last_event_ts[tid] = now_t
                             fall_ev[tid] = True
                     else:
                         if fall_ev.get(tid):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
 
+            zones.draw(frame)  # [QA-P0-3] overlay only after detection
             viz.fps(frame)
 
 
     except KeyboardInterrupt:
         print(f"\n[{source_id[-30:]}] Stopped.")
     finally:
-        cap.release(); hand_d.release()
+        if cap is not None: cap.release()
+        if reader is not None: reader.release()
+        hand_d.release()
         if vlc_mgr: vlc_mgr.stop()
         print(f"[{source_id[-30:]}] Done.")
 

@@ -518,12 +518,21 @@ def _detect_objects(frame):
     return objects
 
 
+import threading as _threading
+_INFER_LOCK = _threading.Lock()
+
 @app.post('/detect_all')
-async def detect_all(image: UploadFile = File(...)):
+def detect_all(image: UploadFile = File(...)):
     """Detect people (pose model, w/ keypoints, + optional posture_class
     from the custom fall-pose model) and objects (general COCO model) —
-    returns both. See module docstring for the fix rationale."""
-    data = await image.read()
+    returns both. See module docstring for the fix rationale.
+
+    [QA-P0-7] Was `async def` running blocking YOLO inference directly on
+    the event loop → every other request (multi-camera, /health, zones)
+    queued behind it. Now a plain `def` (runs in Starlette's threadpool)
+    with a lock around inference since Ultralytics models aren't
+    thread-safe."""
+    data = image.file.read()
     arr = np.frombuffer(data, np.uint8)
     frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if frame is None:
@@ -533,8 +542,9 @@ async def detect_all(image: UploadFile = File(...)):
     # [CLAHE] Apply contrast normalization before all detection
     frame = _apply_clahe(frame)
 
-    people = _detect_people(frame, h, w)
-    objects = _detect_objects(frame)  # [FIX] now actually populated
+    with _INFER_LOCK:
+        people = _detect_people(frame, h, w)
+        objects = _detect_objects(frame)  # [FIX] now actually populated
 
     return {"people": people, "objects": objects}
 

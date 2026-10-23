@@ -1,0 +1,217 @@
+{
+  "C1-FL1-Lift.avi": [
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 136.31,
+      "frame_idx": 1086,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=10] held=2.5s",
+      "confidence": 0.92,
+      "track_id": 10,
+      "bbox": [
+        929,
+        292,
+        1130,
+        655
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/pose_sos_tid10_136s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 137.82,
+      "frame_idx": 1098,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=13] held=2.5s",
+      "confidence": 0.92,
+      "track_id": 13,
+      "bbox": [
+        553,
+        213,
+        788,
+        603
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/pose_sos_tid13_137s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 214.64,
+      "frame_idx": 1710,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=10] held=2.5s",
+      "confidence": 0.9,
+      "track_id": 10,
+      "bbox": [
+        500,
+        291,
+        674,
+        620
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/pose_sos_tid10_214s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 240.24,
+      "frame_idx": 1914,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=0] held=2.5s",
+      "confidence": 0.93,
+      "track_id": 0,
+      "bbox": [
+        774,
+        738,
+        1019,
+        1074
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/pose_sos_tid0_240s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 318.06,
+      "frame_idx": 2534,
+      "event_type": "fall",
+      "label": "FALL [tid=2] angle=4deg",
+      "confidence": 0.91,
+      "track_id": 2,
+      "bbox": [
+        933,
+        598,
+        1273,
+        743
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid2_318s.jpg",
+      "details": "angle=3.5 ratio=2.34 time_lying=3.5"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 319.32,
+      "frame_idx": 2544,
+      "event_type": "fall",
+      "label": "FALL [tid=13] angle=10deg",
+      "confidence": 0.68,
+      "track_id": 13,
+      "bbox": [
+        622,
+        881,
+        1033,
+        1017
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid13_319s.jpg",
+      "details": "angle=9.5 ratio=3.04 time_lying=4.0"
+    }
+  ],
+  "D1-1st-Floor.mp4": [
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 71.21,
+      "frame_idx": 1068,
+      "event_type": "fall",
+      "label": "FALL [tid=1] angle=34deg",
+      "confidence": 0.25,
+      "track_id": 1,
+      "bbox": [
+        1298,
+        854,
+        1564,
+        1068
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid1_71s.jpg",
+      "details": "angle=33.7 ratio=1.0 time_lying=5.3"
+    }
+  ],
+  "D1-Carpark.mp4": [
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 48.11,
+      "frame_idx": 382,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=14] held=3.0s",
+      "confidence": 0.88,
+      "track_id": 14,
+      "bbox": [
+        958,
+        328,
+        1059,
+        552
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid14_48s.jpg",
+      "details": "time_held=3.0s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 170.04,
+      "frame_idx": 1350,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=26] held=2.5s",
+      "confidence": 0.41,
+      "track_id": 26,
+      "bbox": [
+        910,
+        321,
+        984,
+        497
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid26_170s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 343.85,
+      "frame_idx": 2730,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=78] held=2.5s",
+      "confidence": 0.8,
+      "track_id": 78,
+      "bbox": [
+        941,
+        813,
+        1056,
+        1064
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid78_343s.jpg",
+      "details": "time_held=2.5s"
+    }
+  ],
+  "D1-Stair-FL2 1.mp4": [],
+  "D1-Stair-FL2 2.mp4": [
+    {
+      "video": "D1-Stair-FL2 2.mp4",
+      "timestamp_sec": 23.36,
+      "frame_idx": 186,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=4] held=2.5s",
+      "confidence": 0.89,
+      "track_id": 4,
+      "bbox": [
+        1262,
+        200,
+        1383,
+        516
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 2/pose_sos_tid4_23s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "D1-Stair-FL2 2.mp4",
+      "timestamp_sec": 114.3,
+      "frame_idx": 910,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=0] held=2.8s",
+      "confidence": 0.88,
+      "track_id": 0,
+      "bbox": [
+        1171,
+        210,
+        1318,
+        462
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 2/pose_sos_tid0_114s.jpg",
+      "details": "time_held=2.8s"
+    }
+  ],
+  "E1-Hall 1.mp4": [],
+  "E1-Hall 2.mp4": []
+}

@@ -1,0 +1,72 @@
+{
+  "D1-Carpark.mp4": [
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 48.11,
+      "frame_idx": 382,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=11] held=3.0s",
+      "confidence": 0.88,
+      "track_id": 11,
+      "bbox": [
+        958,
+        328,
+        1059,
+        552
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid11_48s.jpg",
+      "details": "time_held=3.0s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 170.04,
+      "frame_idx": 1350,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=27] held=2.5s",
+      "confidence": 0.41,
+      "track_id": 27,
+      "bbox": [
+        910,
+        321,
+        984,
+        497
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid27_170s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 288.18,
+      "frame_idx": 2288,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=56] held=2.5s",
+      "confidence": 0.88,
+      "track_id": 56,
+      "bbox": [
+        200,
+        747,
+        370,
+        975
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid56_288s.jpg",
+      "details": "time_held=2.5s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 343.85,
+      "frame_idx": 2730,
+      "event_type": "pose_sos",
+      "label": "POSE SOS [tid=72] held=2.5s",
+      "confidence": 0.8,
+      "track_id": 72,
+      "bbox": [
+        941,
+        813,
+        1056,
+        1064
+      ],
+      "snapshot": "snapshots/D1-Carpark/pose_sos_tid72_343s.jpg",
+      "details": "time_held=2.5s"
+    }
+  ]
+}

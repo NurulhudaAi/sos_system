@@ -214,6 +214,7 @@ class AlertDispatcher:
         self._default_cooldown = default_cooldown
         self._enforce_one_per_file = enforce_one_per_file
         self._file_alerted: set[str] = set()
+        self._last_event: Dict[str, float] = {}  # [QA-P0-6] was never initialized
         self.save_local = os.getenv("SAVE_LOCAL_SNAPSHOTS", "true").lower() in ("true", "1", "yes")
 
         try:
