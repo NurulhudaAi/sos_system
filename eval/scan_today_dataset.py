@@ -14,6 +14,7 @@ from pathlib import Path
 from collections import defaultdict, deque
 from datetime import datetime
 
+import math
 import cv2
 import numpy as np
 import requests
@@ -160,6 +161,9 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
     track_prev_center = {}
 
     MIN_CONSEC3 = int(hand_cfg.get("min_consec_sos_frames", 2))
+    hand_temporal_window = int(hand_cfg.get("temporal_window", 10))
+    hand_temporal_thresh = float(hand_cfg.get("temporal_threshold", 0.20))
+    hand_temporal_hits_required = max(1, math.ceil(hand_temporal_window * hand_temporal_thresh))
     hand_min_bbox_area = float(hand_cfg.get("min_hand_bbox_area_norm", 0.002))
     hand_cooldown = float(hand_cfg.get("cooldown_seconds", 30))
     pose_cooldown = float(pose_cfg.get("cooldown_seconds", 60))
@@ -299,22 +303,24 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                     hand_miss[tid] = 0
                 else:
                     hand_miss[tid] = hand_miss.get(tid, 0) + 1
-                    if hand_miss[tid] >= 5:
+                    if hand_miss[tid] >= 8:
                         hs = max(0, hs - 1)
                         hand_miss[tid] = 0
 
                 is_fist = bool(hdet and hs == 3 and not hand_d._palm_open(hl) and hand_d._fingers_closed(hl))
                 if is_fist:
                     hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
-                else:
+                elif hdet:
+                    # Only reset if hand was actually detected and is not a fist
                     hand_consec3[tid] = 0
+                # If not hdet, keep hand_consec3 (grace for distance flicker)
 
                 consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
-                is_sos = bool(hdet and hs == 3 and consec_ok)
+                is_sos = bool(hs == 3 and consec_ok)
                 hand_recent_sos[tid].append(is_sos)
                 sos_hits = sum(1 for ok in hand_recent_sos[tid] if ok)
 
-                if sos_hits >= 3:
+                if sos_hits >= hand_temporal_hits_required:
                     if (frame_ts - _hand_last_ts.get(tid, -1e9)) >= hand_cooldown:
                         lbl = f"HAND SOS [tid={tid}]"
                         snap_name = f"hand_sos_tid{tid}_{int(frame_ts)}s.jpg"

@@ -291,7 +291,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     hand_consec3: dict[int, int] = {}
     MIN_CONSEC3 = max(1, int(hand_cfg.get("min_consec_sos_frames", 1)))
     hand_state1_time: dict[int, float] = {}
-    GRACE_FRAMES = 5
+    GRACE_FRAMES = 8
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     _hand_last_event_ts: dict[int, float] = {}  # per-tid: cooldown timestamp
@@ -591,10 +591,12 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         is_fist_now = bool(hdet and hs == 3 and not hand_d._palm_open(hl) and hand_d._fingers_closed(hl))
                         if is_fist_now:
                             hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
-                        else:
+                        elif hdet:
+                            # Only reset if hand is actually detected but is not a fist (e.g. open palm)
                             hand_consec3[tid] = 0
+                        # If not hdet, keep hand_consec3 (grace for distance flicker)
                         consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
-                        is_sos_frame = bool(hdet and hs == 3 and hand_eligible and consec_ok)
+                        is_sos_frame = bool(hs == 3 and hand_eligible and consec_ok)
                         recent_sos = hand_recent_sos[tid]
                         recent_sos.append(is_sos_frame)
                         sos_hits = sum(1 for ok in recent_sos if ok)

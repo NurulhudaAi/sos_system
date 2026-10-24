@@ -40,11 +40,12 @@ class HandSOSDetector:
         self._fast_sos_min_hand_span = cfg.get("fast_sos_min_hand_span", 0.04)
         # [PRODUCTION FINE-TUNING]
         self._elevation_gate_enabled = cfg.get("elevation_gate_enabled", True)
+        self._elevation_torso_ratio = cfg.get("elevation_torso_ratio", 0.75)  # upper 75% of torso (chest level)
         self._wrist_crop_enabled = cfg.get("wrist_crop_enabled", True)
         self._elevation_margin_norm = cfg.get("elevation_margin_norm", 0.05)
-        self._wrist_crop_padding = cfg.get("wrist_crop_padding", 1.4)
-        self._min_crop_size = cfg.get("min_crop_size", 160)
-        self._min_kp_conf = cfg.get("min_kp_conf", 0.35)
+        self._wrist_crop_padding = cfg.get("wrist_crop_padding", 1.35)
+        self._min_crop_size = cfg.get("min_crop_size", 48)  # adaptive down to 48px for distant hands
+        self._min_kp_conf = cfg.get("min_kp_conf", 0.25)
         try:
             model_path = self._download_hand_model()
             base_opts  = mp_python.BaseOptions(model_asset_path=model_path)
@@ -441,9 +442,9 @@ class HandSOSDetector:
                             hips_y = [y for y, c in [(hy1, hc1), (hy2, hc2)] if c >= self._min_kp_conf]
                             if hips_y:
                                 avg_hip_y = sum(hips_y) / len(hips_y)
-                                torso_h = max(30.0, avg_hip_y - sy)
-                                # Wrist must be in upper half of torso (chest, neck, head, or above shoulders)
-                                if wy <= sy + 0.50 * torso_h:
+                                torso_h = max(25.0, avg_hip_y - sy)
+                                # Wrist must be in chest or upper torso (upper 75% of torso or above)
+                                if wy <= sy + self._elevation_torso_ratio * torso_h:
                                     is_elevated = True
                             else:
                                 if wy <= sy + margin_px:
@@ -453,7 +454,7 @@ class HandSOSDetector:
                                 is_elevated = True
                     else:
                         # Fallback if shoulder conf low: wrist above elbow
-                        if ec >= self._min_kp_conf and wy < ey - margin_px:
+                        if ec >= self._min_kp_conf and wy < ey + 15.0:
                             is_elevated = True
 
             if not is_elevated:
@@ -472,11 +473,11 @@ class HandSOSDetector:
                 dx, dy = (wx - ex) / norm, (wy - ey) / norm
                 cx = wx + dx * (forearm * 0.35)
                 cy = wy + dy * (forearm * 0.35)
-                half_size = max(self._min_crop_size // 2, int(forearm * 0.75 * self._wrist_crop_padding))
+                half_size = max(self._min_crop_size // 2, int(forearm * 1.15 * self._wrist_crop_padding))
             else:
                 # Fallback scale based on frame height
                 cx, cy = wx, wy
-                half_size = max(self._min_crop_size // 2, int(float(h) * 0.12 * self._wrist_crop_padding))
+                half_size = max(self._min_crop_size // 2, int(float(h) * 0.08 * self._wrist_crop_padding))
 
             x1 = max(0, int(cx - half_size))
             y1 = max(0, int(cy - half_size))
@@ -528,9 +529,15 @@ class HandSOSDetector:
                 ch, cw = crop.shape[:2]
                 if ch < min_crop_h and ch > 0:
                     scale = min_crop_h / float(ch)
-                    crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)))
+                    crop = cv2.resize(crop, (int(cw * scale), int(ch * scale)), interpolation=cv2.INTER_CUBIC)
 
-                rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                # Local CLAHE enhancement for contrast on distant/shadowed hands
+                lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
+                l_chan, a_chan, b_chan = cv2.split(lab)
+                clahe_op = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+                l_chan = clahe_op.apply(l_chan)
+                crop_enhanced = cv2.cvtColor(cv2.merge((l_chan, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+                rgb_crop = cv2.cvtColor(crop_enhanced, cv2.COLOR_BGR2RGB)
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_crop)
                 self._results = self._detector.detect(mp_image)
 
