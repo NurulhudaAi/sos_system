@@ -88,7 +88,7 @@ hand_sos:
   min_consec_sos_frames: 2
   # [PRODUCTION FINE-TUNING]
   elevation_gate_enabled: true
-  elevation_torso_ratio: 0.75
+  elevation_torso_ratio: 0.88
   wrist_crop_enabled: true
   elevation_margin_norm: 0.05
   wrist_crop_padding: 1.35

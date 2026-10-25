@@ -272,9 +272,15 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                 if not fr.get("is_fallen"):
                     fall_ev[tid] = False
 
-            # 2. Hand SOS Detection
+            # 2. Distance-Adaptive & Pose SOS Processing
+            head_res = {}
+            if not fall_ev.get(tid) and not is_lying:
+                head_res = head_d.process(tid, kps, h, w, timestamp=frame_ts)
+
+            # 3. Hand SOS Detection
             both_overhead = _are_both_arms_over_head(kps)
-            is_lying = fr.get("is_fallen") or (fr.get("spine_angle") and fr.get("spine_angle") < 40.0)
+            bbox_h = max(0.0, float(bbox[3] - bbox[1]))
+            is_distant = bool(bbox_h < 350.0)
 
             if not both_overhead and not is_lying and not fall_ev.get(tid):
                 prev_hs = hand_states.get(tid, 0)
@@ -320,57 +326,75 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                 hand_recent_sos[tid].append(is_sos)
                 sos_hits = sum(1 for ok in hand_recent_sos[tid] if ok)
 
+                # Multi-modal synergy: If distant person holds Pose SOS and hand shows elevated activity
+                if is_distant and head_res.get("gesture_detected") and head_res.get("time_held", 0.0) >= 1.8 and hs >= 1:
+                    head_res["triggered"] = True
+
                 if sos_hits >= hand_temporal_hits_required:
                     if (frame_ts - _hand_last_ts.get(tid, -1e9)) >= hand_cooldown:
-                        lbl = f"HAND SOS [tid={tid}]"
-                        snap_name = f"hand_sos_tid{tid}_{int(frame_ts)}s.jpg"
+                        is_pose_fused = bool(
+                            head_res.get("time_held", 0.0) >= 1.0 or
+                            (frame_ts - _pose_last_ts.get(tid, -1e9)) < 10.0
+                        )
+                        ev_type = "critical_sos" if is_pose_fused else "hand_sos"
+                        lbl = f"CRITICAL SOS [tid={tid}] Hand+Pose Multi-Modal" if is_pose_fused else f"HAND SOS [tid={tid}]"
+                        col = (0, 0, 255) if is_pose_fused else (0, 255, 0)
+                        snap_name = f"{ev_type}_tid{tid}_{int(frame_ts)}s.jpg"
                         snap_path = snap_dir / snap_name
-                        save_snapshot_all_persons(snap_path, clean_frame, assigned, tid, lbl, (0, 255, 0))
+                        save_snapshot_all_persons(snap_path, clean_frame, assigned, tid, lbl, col)
 
                         ev_item = {
                             "video": video_path.name,
                             "timestamp_sec": round(frame_ts, 2),
                             "frame_idx": frame_idx,
-                            "event_type": "hand_sos",
+                            "event_type": ev_type,
                             "label": lbl,
-                            "confidence": round(conf, 2),
+                            "confidence": round(max(conf, 0.98 if is_pose_fused else 0.90), 2),
                             "track_id": tid,
                             "bbox": [int(v) for v in bbox],
                             "snapshot": str(snap_path.relative_to(out_dir)),
-                            "details": f"step3_consec={hand_consec3.get(tid)}",
+                            "details": f"fused={is_pose_fused}, step3_consec={hand_consec3.get(tid)}",
                         }
                         events.append(ev_item)
                         _hand_last_ts[tid] = frame_ts
+                        if is_pose_fused:
+                            _pose_last_ts[tid] = frame_ts
                         hand_states[tid] = 0
                         hand_consec3[tid] = 0
                         hand_recent_sos[tid].clear()
                         print(f"  🖐️ [{frame_ts:6.1f}s] {lbl} -> {snap_name}")
 
-            # 3. Pose SOS Detection
+            # 4. Pose SOS Dispatch
             if not fall_ev.get(tid) and not is_lying:
-                head_res = head_d.process(tid, kps, h, w, timestamp=frame_ts)
                 if head_res.get("triggered"):
                     is_spatial_pose_dup = spatial_dedup.should_suppress("pose_sos", cx, cy, frame_ts, cooldown_sec=pose_cooldown)
-                    if (frame_ts - _pose_last_ts.get(tid, -1e9)) >= pose_cooldown and not is_spatial_pose_dup:
-                        lbl = f"POSE SOS [tid={tid}] held={head_res.get('time_held'):.1f}s"
-                        snap_name = f"pose_sos_tid{tid}_{int(frame_ts)}s.jpg"
+                    hand_recently_emitted = (frame_ts - _hand_last_ts.get(tid, -1e9)) < 10.0
+                    if (frame_ts - _pose_last_ts.get(tid, -1e9)) >= pose_cooldown and not is_spatial_pose_dup and not hand_recently_emitted:
+                        is_hand_co_active = bool(hs >= 1 or hand_consec3.get(tid, 0) >= 1)
+                        ev_type = "critical_sos" if is_hand_co_active else "pose_sos"
+                        held_s = head_res.get('time_held', 0.0)
+                        lbl = f"CRITICAL SOS [tid={tid}] Pose+Hand Multi-Modal held={held_s:.1f}s" if is_hand_co_active else f"POSE SOS [tid={tid}] held={held_s:.1f}s"
+                        col = (0, 0, 255) if is_hand_co_active else (0, 165, 255)
+                        snap_name = f"{ev_type}_tid{tid}_{int(frame_ts)}s.jpg"
                         snap_path = snap_dir / snap_name
-                        save_snapshot_all_persons(snap_path, clean_frame, assigned, tid, lbl, (0, 165, 255))
+                        save_snapshot_all_persons(snap_path, clean_frame, assigned, tid, lbl, col)
 
                         ev_item = {
                             "video": video_path.name,
                             "timestamp_sec": round(frame_ts, 2),
                             "frame_idx": frame_idx,
-                            "event_type": "pose_sos",
+                            "event_type": ev_type,
                             "label": lbl,
-                            "confidence": round(conf, 2),
+                            "confidence": round(max(conf, 0.98 if is_hand_co_active else 0.88), 2),
                             "track_id": tid,
                             "bbox": [int(v) for v in bbox],
                             "snapshot": str(snap_path.relative_to(out_dir)),
-                            "details": f"time_held={head_res.get('time_held'):.1f}s",
+                            "details": f"fused={is_hand_co_active}, time_held={held_s:.1f}s",
                         }
                         events.append(ev_item)
                         _pose_last_ts[tid] = frame_ts
+                        if is_hand_co_active:
+                            _hand_last_ts[tid] = frame_ts
                         print(f"  🙌 [{frame_ts:6.1f}s] {lbl} -> {snap_name}")
 
         if frame_idx % 100 == 0:

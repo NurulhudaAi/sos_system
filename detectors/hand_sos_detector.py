@@ -146,6 +146,9 @@ class HandSOSDetector:
         max_x = max(lm[5].x, lm[17].x)
         if min_x <= lm[4].x <= max_x and thumb_dist < hand_span * 0.85:
             return True
+        # Fallback 4: Natural outer fist grip (when all fingers are closed, thumb rests over fingers)
+        if self._fingers_closed(lm) and thumb_dist < hand_span * 1.15:
+            return True
         return False
 
     def _fingers_closed(self, lm):
@@ -416,8 +419,9 @@ class HandSOSDetector:
             if shoulders_y and hips_y:
                 avg_shoulder_y = sum(shoulders_y) / len(shoulders_y)
                 avg_hip_y = sum(hips_y) / len(hips_y)
-                # If shoulders are not well above hips, person is horizontal/laying down!
-                if avg_shoulder_y >= avg_hip_y - margin_px:
+                # If shoulders are not above hips, person is horizontal/laying down!
+                # Use a small 10px threshold instead of frame-scaled margin so distant people (3-5m) aren't discarded!
+                if avg_shoulder_y >= avg_hip_y - 10.0:
                     return []
 
         elevated_boxes = []
@@ -443,8 +447,10 @@ class HandSOSDetector:
                             if hips_y:
                                 avg_hip_y = sum(hips_y) / len(hips_y)
                                 torso_h = max(25.0, avg_hip_y - sy)
-                                # Wrist must be in chest or upper torso (upper 75% of torso or above)
-                                if wy <= sy + self._elevation_torso_ratio * torso_h:
+                                # Wrist must be in chest or upper torso
+                                # For distant persons (torso_h < 120px), allow up to 0.90 of torso to prevent 2-3px edge dropouts
+                                effective_ratio = max(self._elevation_torso_ratio, 0.90) if torso_h < 120.0 else self._elevation_torso_ratio
+                                if wy <= sy + effective_ratio * torso_h:
                                     is_elevated = True
                             else:
                                 if wy <= sy + margin_px:
@@ -542,30 +548,46 @@ class HandSOSDetector:
                 self._results = self._detector.detect(mp_image)
 
                 if self._results and self._results.hand_landmarks:
-                    hands = list(self._results.hand_landmarks)
-                    # [QA] num_hands=2 and caller uses hands[0] → the chosen
-                    # hand swapped L/R (or another person's hand) between
-                    # frames, breaking the 3-step state machine. Put the hand
-                    # whose landmark-0 (wrist) is nearest the YOLO wrist first.
-                    if len(hands) > 1:
-                        wx, wy = item["wrist"]
-                        bw, bh = float(x2 - x1), float(y2 - y1)
-                        def _dist(hl):
-                            hx = x1 + hl[0].x * bw
-                            hy = y1 + hl[0].y * bh
-                            return (hx - wx) ** 2 + (hy - wy) ** 2
-                        hands.sort(key=_dist)
-                    return hands
+                    wx, wy = item["wrist"]
+                    bw, bh = float(x2 - x1), float(y2 - y1)
+                    # [WRIST PROXIMITY LOCK] Gating radius: MediaPipe wrist landmark (0)
+                    # must lie near the target person's YOLO wrist.
+                    # Any background hand from adjacent/behind persons is discarded!
+                    max_dist_sq = (max(28.0, 0.40 * max(bw, bh))) ** 2
+                    matched_hands = []
+                    for hl in self._results.hand_landmarks:
+                        hx = x1 + hl[0].x * bw
+                        hy = y1 + hl[0].y * bh
+                        d_sq = (hx - wx) ** 2 + (hy - wy) ** 2
+                        if d_sq <= max_dist_sq:
+                            matched_hands.append((d_sq, hl))
+                    if matched_hands:
+                        matched_hands.sort(key=lambda x: x[0])
+                        return [mh[1] for mh in matched_hands]
 
-            # [QA] The upper-body fallback bypassed the elevation gate (hands
-            # resting at the waist/desk were evaluated) → only use it when
-            # the gate is disabled.
-            if bbox is not None and not self._elevation_gate_enabled:
+            # If wrist crop did not detect a hand (e.g. YOLO keypoints placed wrist too low
+            # or forearm was foreshortened), fallback to the upper-body / chest region
+            if bbox is not None:
                 bx1, by1, bx2, by2 = bbox
-                ub_box = [bx1, by1, bx2, int(by1 + 0.60 * (by2 - by1))]
+                ub_box = [int(bx1), int(by1), int(bx2), int(by1 + 0.60 * (by2 - by1))]
                 ub_lms = self.process_crop(frame_bgr, ub_box, min_crop_h=min_crop_h)
                 if ub_lms:
-                    return ub_lms
+                    # Gating: detected hand's wrist must be close to this person's upper body keypoints
+                    # (shoulders 5,6, elbows 7,8, wrists 9,10) to reject background/adjacent people
+                    ub_w, ub_h = float(ub_box[2] - ub_box[0]), float(ub_box[3] - ub_box[1])
+                    valid_ub_hands = []
+                    ub_kps = [kps[i] for i in (5, 6, 7, 8, 9, 10) if i < len(kps) and float(kps[i][2]) >= self._min_kp_conf]
+                    for hl in ub_lms:
+                        hx = ub_box[0] + hl[0].x * ub_w
+                        hy = ub_box[1] + hl[0].y * ub_h
+                        if ub_kps:
+                            min_d = min(((hx - float(pt[0]))**2 + (hy - float(pt[1]))**2)**0.5 for pt in ub_kps)
+                            if min_d <= max(45.0, 0.45 * (bx2 - bx1)):
+                                valid_ub_hands.append(hl)
+                        else:
+                            valid_ub_hands.append(hl)
+                    if valid_ub_hands:
+                        return valid_ub_hands
 
             return []
 

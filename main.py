@@ -543,6 +543,15 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     # Suppress if moving rapidly (running > 0.45 frame_h/s, not normal stepping/gesturing)
                     is_moving_fast = (vel_px_s / max(1.0, float(h))) > 0.45
 
+                    # ── Distance-Adaptive Scale & Pose SOS Processing ────
+                    bbox_h = max(0.0, float(bbox[3] - bbox[1]))
+                    is_distant = bool(bbox_h < 350.0)
+
+                    in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
+                    head_res = {}
+                    if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
+                        head_res = head_d.process(tid, kp, h, w, timestamp=now_t)
+
                     # Suppress Hand SOS if disabled by signal_config, both arms overhead (Pose SOS), fallen, lying, or moving fast
                     if (not hand_active) or both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:
                         hand_states[tid] = 0
@@ -606,26 +615,42 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         )
                         sos_confirmed = temporal_confirmed
 
+                        # Multi-modal synergy: If distant person holds Pose SOS and hand shows elevated activity
+                        if is_distant and head_res.get("gesture_detected") and head_res.get("time_held", 0.0) >= 1.8 and hs >= 1:
+                            head_res["triggered"] = True
+
+                        # ── Multi-Modal Hand SOS Dispatch ──
                         if sos_confirmed and not fall_ev.get(tid) and not is_lying and not recently_fallen:
                             can_emit = (now_t - _hand_last_event_ts.get(tid, -1e9)) >= hand_cooldown_seconds
                             if can_emit and not hand_ev.get(tid):
-                                # Generate Base64 snapshot and save local image/JSON metadata/log
+                                is_pose_fused = bool(
+                                    head_res.get("time_held", 0.0) >= 1.0 or
+                                    (now_t - _pose_last_event_ts.get(tid, -1e9)) < 10.0
+                                )
+                                ev_type = "critical_sos" if is_pose_fused else "hand_sos"
+                                ev_label = f"CRITICAL SOS [tid={tid}] Hand+Pose Multi-Modal" if is_pose_fused else f"HAND SOS [tid={tid}]"
+                                ev_color = (0, 0, 255) if is_pose_fused else (0, 255, 0)
+                                ev_sev = "Critical" if is_pose_fused else "High"
+                                ev_conf = max(conf, 0.98 if is_pose_fused else 0.90)
+
                                 b64_snap, snap_file = save_annotated_snapshot(
                                     clean_frame,
-                                    event_type="hand_sos",
+                                    event_type=ev_type,
                                     bbox=bbox,
-                                    label=f"HAND SOS [tid={tid}]",
-                                    color=(0, 255, 0),
+                                    label=ev_label,
+                                    color=ev_color,
                                     coord_size=(w, h),
                                     snapshot_dir=snapshot_dir,
                                     save_local=save_local_snapshots,
                                     extra_meta={
                                         "source_id": source_id,
                                         "track_id": tid,
-                                        "confidence": conf,
+                                        "confidence": ev_conf,
                                         "location": location,
+                                        "is_multi_modal": is_pose_fused,
                                     },
                                     all_tracks=all_frame_tracks,
+                                    status_code=500 if is_pose_fused else 200,
                                 )
                                 raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                                 try:
@@ -634,9 +659,9 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         event_uuid     = ev_uuid,
                                         detection_type = "Gesture",
                                         zone           = location,
-                                        confidence     = conf,
+                                        confidence     = ev_conf,
                                         timestamp      = datetime.utcnow().isoformat(),
-                                        severity       = "High",
+                                        severity       = ev_sev,
                                         metadata       = {
                                             "source_id":       source_id,
                                             "track_id":        tid,
@@ -644,16 +669,19 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                             "snapshot_base64": raw_b64,
                                             "imagePath":       snap_file or b64_snap,
                                             "snapshot_file":   snap_file,
-                                            "gesture":         "hand_sos",
+                                            "gesture":         ev_type,
+                                            "fused_signals":   ["hand_sos", "pose_sos"] if is_pose_fused else ["hand_sos"],
                                             "bbox":            [int(v) for v in bbox],
                                             "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
                                             "frame_size":      [w, h],
                                         },
                                     )
-                                    print(f"  [DB INSERTED] Hand SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
+                                    print(f"  [DB INSERTED] {ev_label} uuid={ev_uuid} | file={snap_file or 'base64'}")
                                 except Exception as e:
-                                    print(f"[DB] hand_sos insert error: {e}")
+                                    print(f"[DB] {ev_type} insert error: {e}")
                                 _hand_last_event_ts[tid] = now_t
+                                if is_pose_fused:
+                                    _pose_last_event_ts[tid] = now_t  # Suppress duplicate pose alert
                                 hand_states[tid] = 0
                                 hand_consec3[tid] = 0
                                 hand_recent_sos[tid].clear()
@@ -662,30 +690,39 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             if not sos_confirmed:
                                 hand_ev[tid] = False
 
-                    # ── Hands Over Head SOS (Pose SOS) ───────────────────
-                    in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
+                    # ── Multi-Modal Pose SOS Dispatch ────────────────────
                     if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
-                        head_res = head_d.process(tid, kp, h, w, timestamp=now_t)
                         can_emit_pose = (now_t - _pose_last_event_ts.get(tid, -1e9)) >= pose_cooldown_seconds
                         is_spatial_pose_dup = spatial_dedup.should_suppress("pose_sos", cx, cy, now_t, cooldown_sec=pose_cooldown_seconds)
-                        if head_res.get("triggered") and can_emit_pose and not is_spatial_pose_dup:
+                        hand_recently_emitted = (now_t - _hand_last_event_ts.get(tid, -1e9)) < 10.0
+                        if head_res.get("triggered") and can_emit_pose and not is_spatial_pose_dup and not hand_recently_emitted:
+                            is_hand_co_active = bool(hs >= 1 or hand_consec3.get(tid, 0) >= 1)
+                            ev_type = "critical_sos" if is_hand_co_active else "pose_sos"
+                            held_s = head_res.get('time_held', 0.0)
+                            ev_label = f"CRITICAL SOS [tid={tid}] Pose+Hand Multi-Modal held={held_s:.1f}s" if is_hand_co_active else f"POSE SOS [tid={tid}] held={held_s:.1f}s"
+                            ev_color = (0, 0, 255) if is_hand_co_active else (0, 165, 255)
+                            ev_sev = "Critical" if is_hand_co_active else "High"
+                            ev_conf = max(conf, 0.98 if is_hand_co_active else 0.88)
+
                             b64_snap, snap_file = save_annotated_snapshot(
                                 clean_frame,
-                                event_type="pose_sos",
+                                event_type=ev_type,
                                 bbox=bbox,
-                                label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s",
-                                color=(0, 165, 255),
+                                label=ev_label,
+                                color=ev_color,
                                 coord_size=(w, h),
                                 snapshot_dir=snapshot_dir,
                                 save_local=save_local_snapshots,
                                 extra_meta={
                                     "source_id": source_id,
                                     "track_id": tid,
-                                    "confidence": conf,
+                                    "confidence": ev_conf,
                                     "location": location,
-                                    "time_held": head_res.get("time_held", 0.0),
+                                    "time_held": held_s,
+                                    "is_multi_modal": is_hand_co_active,
                                 },
                                 all_tracks=all_frame_tracks,
+                                status_code=500 if is_hand_co_active else 200,
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
                             try:
@@ -694,9 +731,9 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                     event_uuid     = ev_uuid,
                                     detection_type = "Gesture",
                                     zone           = location,
-                                    confidence     = conf,
+                                    confidence     = ev_conf,
                                     timestamp      = datetime.utcnow().isoformat(),
-                                    severity       = "High",
+                                    severity       = ev_sev,
                                     metadata       = {
                                         "source_id":       source_id,
                                         "track_id":        tid,
@@ -704,17 +741,20 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         "snapshot_base64": raw_b64,
                                         "imagePath":       snap_file or b64_snap,
                                         "snapshot_file":   snap_file,
-                                        "gesture":         "pose_sos",
-                                        "time_held":       head_res.get("time_held", 0.0),
+                                        "gesture":         ev_type,
+                                        "fused_signals":   ["pose_sos", "hand_sos"] if is_hand_co_active else ["pose_sos"],
+                                        "time_held":       held_s,
                                         "bbox":            [int(v) for v in bbox],
                                         "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
                                         "frame_size":      [w, h],
                                     },
                                 )
-                                print(f"  [DB INSERTED] Pose SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
+                                print(f"  [DB INSERTED] {ev_label} uuid={ev_uuid} | file={snap_file or 'base64'}")
                             except Exception as e:
-                                print(f"[DB] pose_sos insert error: {e}")
+                                print(f"[DB] {ev_type} insert error: {e}")
                             _pose_last_event_ts[tid] = now_t
+                            if is_hand_co_active:
+                                _hand_last_event_ts[tid] = now_t
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):

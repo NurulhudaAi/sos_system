@@ -191,6 +191,7 @@ class AlertDispatcher:
         "fall":"FALL DETECTED",
         "hand_sos":"SILENT SOS HAND",
         "pose_sos":"HANDS UP SOS",
+        "critical_sos":"CRITICAL SOS (MULTI-MODAL)",
         "fall_warning":"FALL WARNING",
     }
 
@@ -248,6 +249,8 @@ class AlertDispatcher:
         """Return (level_int, level_name, flags)
         level_int: 0=LOG, 1=MED, 2=HIGH, 3=CRITICAL
         """
+        if atype == "critical_sos":
+            return 3, "CRITICAL", ["MULTI_MODAL_SOS", "SOS_GESTURE"]
         if atype in ("hand_sos", "pose_sos"):
             return 2, "HIGH", ["SOS_GESTURE"]
 
@@ -423,8 +426,8 @@ class AlertDispatcher:
         # ── MongoDB persist ───────────────────────────────────────────────
         if self.db:
             try:
-                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "pose_sos": "Gesture", "object_event": "ObjectMissing"}
-                _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "High"}
+                _det_type_map = {"fall": "Fall", "hand_sos": "Gesture", "pose_sos": "Gesture", "critical_sos": "Gesture", "object_event": "ObjectMissing"}
+                _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "Critical"}
                 source_id   = extra.get("source_id") if isinstance(extra, dict) else None
                 source_path = extra.get("source")    if isinstance(extra, dict) else None
                 track_id    = extra.get("track_id")  if isinstance(extra, dict) else None
