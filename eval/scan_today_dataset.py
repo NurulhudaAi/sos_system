@@ -273,15 +273,16 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                     fall_ev[tid] = False
 
             # 2. Distance-Adaptive & Pose SOS Processing
+            is_lying = fr.get("is_fallen") or (fr.get("spine_angle") and fr.get("spine_angle") < 40.0)
+            both_overhead = _are_both_arms_over_head(kps)
+            bbox_h = max(0.0, float(bbox[3] - bbox[1]))
+            is_distant = bool(bbox_h < 350.0)
+
             head_res = {}
             if not fall_ev.get(tid) and not is_lying:
                 head_res = head_d.process(tid, kps, h, w, timestamp=frame_ts)
 
             # 3. Hand SOS Detection
-            both_overhead = _are_both_arms_over_head(kps)
-            bbox_h = max(0.0, float(bbox[3] - bbox[1]))
-            is_distant = bool(bbox_h < 350.0)
-
             if not both_overhead and not is_lying and not fall_ev.get(tid):
                 prev_hs = hand_states.get(tid, 0)
                 hs = prev_hs
