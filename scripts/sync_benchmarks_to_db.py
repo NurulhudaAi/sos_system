@@ -132,3 +132,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     sync_events_to_db(Path(args.summary))
+

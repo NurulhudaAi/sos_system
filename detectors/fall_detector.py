@@ -666,6 +666,18 @@ class FallDetector:
             or danger_lying
         )
 
+        # ── Event Confidence (Fall Certainty) ──
+        event_conf = 0.0
+        if is_fallen or is_down:
+            angle_cert = max(0.0, min(1.0, (90.0 - angle) / 65.0))
+            ratio_cert = max(0.0, min(1.0, (ratio - 1.0) / 0.8)) if ratio else 0.5
+            spike_cert = 1.0 if spike_t else 0.0
+            model_cert = posture_conf if (posture_class == "laying" and posture_conf > 0.3) else 0.75
+            lying_time_cert = min(1.0, (time_lying or 0.0) / 6.0)
+
+            raw_event_conf = 0.72 + 0.10 * angle_cert + 0.06 * ratio_cert + 0.04 * spike_cert + 0.04 * lying_time_cert + 0.04 * model_cert
+            event_conf = round(min(0.99, max(0.80, raw_event_conf)), 2)
+
         return {
             "is_fallen":             bool(is_fallen),
             "is_down":               bool(is_down),
@@ -678,6 +690,7 @@ class FallDetector:
             "vel_y_norm":            round(last_v_norm, 4),
             "avg_vel_norm":          round(avg_abs_v_norm, 4),
             "is_critical":           bool(is_critical),
+            "event_confidence":      event_conf,
             "spike_time":            spike_t,
             "ground_time":           ground_t,
             "time_to_ground":        time_to_ground,

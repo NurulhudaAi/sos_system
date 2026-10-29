@@ -28,7 +28,9 @@ danger:
 fall:
   bbox_ratio_thresh: 1.4   # [QA] was 1.2 — arms out / sitting stretched passed
   confirm_seconds: 4.0
-  cooldown_seconds: 120
+  recover_seconds: 5.0
+  dispatch_delay_seconds: 10.0
+  cooldown_seconds: 60
   critical_seconds: 30.0
   danger_lying_seconds: 15.0
   danger_max_seconds: 120.0
@@ -39,7 +41,6 @@ fall:
   history_len: 16
   lying_angle_thresh: 40.0
   motion_thresh_norm: 0.02
-  recover_seconds: 5.0
   spike_thresh_norm: 0.18
   min_model_conf: 0.5      # [QA] was 0.25 — model shortcut fired on weak calls
   model_confirm_seconds: 3.0
@@ -96,9 +97,11 @@ hand_sos:
 
 hands_over_head:
   min_kp_conf: 0.3
-  confirm_seconds: 2.5
-  cooldown_seconds: 60
+  confirm_seconds: 7.0       # 7-10s timeline
+  cooldown_seconds: 30      # 30s cooldown
   margin_above_nose: 0.03
+  triangle_wrist_max_sep_ratio: 0.40  # Option 1: triangle hands touching/close
+  triangle_elbow_min_ratio: 0.50      # Option 1: elbows flared out to form triangle roof
 
 object_guardian:
   cooldown_seconds: 60

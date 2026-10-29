@@ -400,11 +400,60 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
                 "state":        "InReview",
                 "reviewedAt":   _utcnow(),
                 "resolutionNotes": notes,
+                "updatedAt_sys": _utcnow(),
             }}
         )
         return result.modified_count > 0
     except Exception as e:
         logger.error(f"acknowledge_event error: {e}")
+        return False
+
+
+def resolve_incident(event_uuid: str, resolved_by: str = "auto_recovery", notes: str = "", post_event_status: Optional[str] = None) -> bool:
+    """Transition: state → Resolved (Action Plan for Post-Alert Recovery / Departure)"""
+    db = _get_db()
+    try:
+        update_doc = {
+            "state": "Resolved",
+            "resolvedBy": resolved_by,
+            "resolvedAt": _utcnow(),
+            "resolutionNotes": notes,
+            "updatedAt_sys": _utcnow(),
+        }
+        if post_event_status:
+            update_doc["post_event_status"] = post_event_status
+            update_doc["metadata.post_event_status"] = post_event_status
+
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_doc}
+        )
+        logger.info(f"Incident {event_uuid} resolved ({resolved_by}): {notes}")
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"resolve_incident error for {event_uuid}: {e}")
+        return False
+
+
+def update_incident_notes(event_uuid: str, notes: str, extra_meta: Optional[Dict] = None) -> bool:
+    """Append or update incident notes / metadata (e.g. subject left frame)"""
+    db = _get_db()
+    try:
+        update_set: Dict[str, Any] = {
+            "resolutionNotes": notes,
+            "updatedAt_sys": _utcnow(),
+        }
+        if extra_meta:
+            for k, v in extra_meta.items():
+                update_set[f"metadata.{k}"] = _bson_safe(v)
+
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_set}
+        )
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"update_incident_notes error for {event_uuid}: {e}")
         return False
 
 
