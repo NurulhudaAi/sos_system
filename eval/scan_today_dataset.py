@@ -12,7 +12,7 @@ import json
 import argparse
 from pathlib import Path
 from collections import defaultdict, deque
-from datetime import datetime
+from datetime import datetime, timezone
 
 import math
 import cv2
@@ -116,6 +116,7 @@ def save_snapshot_all_persons(snap_path, frame, all_assigned, alert_tid, alert_l
 def _dispatch_to_db(ev_type: str, lbl: str, conf: float, tid: int, bbox: list, snap_path: Path, video_path: Path, frame_ts: float, details: str = ""):
     try:
         from database import insert_incident
+        from datetime import datetime, timezone
         import uuid
         import base64
         det_map = {
