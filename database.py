@@ -16,7 +16,10 @@ from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 import base64
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except Exception:
+    AESGCM = None
 
 try:
     from dotenv import load_dotenv

@@ -113,7 +113,66 @@ def save_snapshot_all_persons(snap_path, frame, all_assigned, alert_tid, alert_l
     cv2.imwrite(str(snap_path), disp)
 
 
-def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> list:
+def _dispatch_to_db(ev_type: str, lbl: str, conf: float, tid: int, bbox: list, snap_path: Path, video_path: Path, frame_ts: float, details: str = ""):
+    try:
+        from database import insert_incident
+        import uuid
+        import base64
+        det_map = {
+            "fall": "Fall",
+            "hand_sos": "Gesture",
+            "pose_sos": "Gesture",
+            "critical_sos": "Gesture",
+            "object_event": "ObjectMissing",
+        }
+        sev_map = {
+            "critical_sos": "Critical",
+            "fall": "High",
+            "hand_sos": "High",
+            "pose_sos": "High",
+        }
+        raw_b64 = ""
+        b64_url = ""
+        if snap_path and snap_path.exists():
+            img = cv2.imread(str(snap_path))
+            if img is not None:
+                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                raw_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+                b64_url = f"data:image/jpeg;base64,{raw_b64}"
+
+        ev_uuid = str(uuid.uuid4())
+        cam_code = video_path.stem
+        iso_now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        insert_incident(
+            event_uuid     = ev_uuid,
+            detection_type = det_map.get(ev_type, "Fall"),
+            zone           = cam_code,
+            confidence     = float(conf),
+            timestamp      = iso_now,
+            severity       = sev_map.get(ev_type, "High"),
+            metadata       = {
+                "cameraId":          cam_code,
+                "source_id":         cam_code,
+                "video_file":        video_path.name,
+                "track_id":          tid,
+                "trackId":           tid,
+                "snapshotUrl":       b64_url,
+                "snapshot_base64":   raw_b64,
+                "imagePath":         str(snap_path),
+                "event_type":        ev_type,
+                "label":             lbl,
+                "video_timestamp_s": round(frame_ts, 2),
+                "bbox":              [int(v) for v in bbox] if bbox is not None else None,
+                "details":           details,
+            }
+        )
+        print(f"    💾 [DB INSERTED] {lbl} uuid={ev_uuid[:8]}...")
+    except Exception as e:
+        print(f"    ⚠️ [DB INSERT ERROR] {e}")
+
+
+def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, send_db: bool = False) -> list:
     video_path = Path(video_path)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -268,6 +327,8 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                     _fall_last_ts[tid] = frame_ts
                     fall_ev[tid] = True
                     print(f"  🚨 [{frame_ts:6.1f}s] {lbl} -> {snap_name}")
+                    if send_db:
+                        _dispatch_to_db("fall", lbl, conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"])
             else:
                 if not fr.get("is_fallen"):
                     fall_ev[tid] = False
@@ -364,6 +425,8 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                         hand_consec3[tid] = 0
                         hand_recent_sos[tid].clear()
                         print(f"  🖐️ [{frame_ts:6.1f}s] {lbl} -> {snap_name}")
+                        if send_db:
+                            _dispatch_to_db(ev_type, lbl, max(conf, 0.98 if is_pose_fused else 0.90), tid, bbox, snap_path, video_path, frame_ts, ev_item["details"])
 
             # 4. Pose SOS Dispatch
             if not fall_ev.get(tid) and not is_lying:
@@ -397,6 +460,8 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1) -> 
                         if is_hand_co_active:
                             _hand_last_ts[tid] = frame_ts
                         print(f"  🙌 [{frame_ts:6.1f}s] {lbl} -> {snap_name}")
+                        if send_db:
+                            _dispatch_to_db(ev_type, lbl, max(conf, 0.98 if is_hand_co_active else 0.88), tid, bbox, snap_path, video_path, frame_ts, ev_item["details"])
 
         if frame_idx % 100 == 0:
             elapsed = time.time() - t_start
@@ -417,6 +482,7 @@ def main():
     parser.add_argument("--video", type=str, default="", help="Scan single video by name")
     parser.add_argument("--out-dir", type=str, default="eval/scan_reports", help="Output directory for reports & snapshots")
     parser.add_argument("--skip", type=int, default=1, help="Process every Nth frame (default=1)")
+    parser.add_argument("--send-db", action="store_true", default=False, help="Insert detected incidents into MongoDB Atlas")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -432,11 +498,11 @@ def main():
         print("❌ No videos found to scan.")
         sys.exit(1)
 
-    print(f"Found {len(target_videos)} video(s) to scan.")
+    print(f"Found {len(target_videos)} video(s) to scan. Send to DB: {args.send_db}")
     all_events = {}
 
     for v in target_videos:
-        evs = scan_single_video(v, out_dir=out_dir, skip_frames=args.skip)
+        evs = scan_single_video(v, out_dir=out_dir, skip_frames=args.skip, send_db=args.send_db)
         all_events[v.name] = evs
 
     # Write summary JSON and Markdown
