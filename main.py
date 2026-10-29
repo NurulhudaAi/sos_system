@@ -655,10 +655,6 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         )
                         sos_confirmed = temporal_confirmed
 
-                        # Multi-modal synergy: If distant person holds Pose SOS and hand shows elevated activity
-                        if is_distant and head_res.get("gesture_detected") and head_res.get("time_held", 0.0) >= 1.8 and hs >= 1:
-                            head_res["triggered"] = True
-
                         # ── Multi-Modal Hand SOS Dispatch ──
                         if sos_confirmed and not fall_ev.get(tid) and not is_lying and not recently_fallen:
                             can_emit = (now_t - _hand_last_event_ts.get(tid, -1e9)) >= hand_cooldown_seconds

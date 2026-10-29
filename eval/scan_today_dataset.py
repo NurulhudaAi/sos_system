@@ -460,10 +460,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                 hand_recent_sos[tid].append(is_sos)
                 sos_hits = sum(1 for ok in hand_recent_sos[tid] if ok)
 
-                # Multi-modal synergy: If distant person holds Pose SOS and hand shows elevated activity
-                if is_distant and head_res.get("gesture_detected") and head_res.get("time_held", 0.0) >= 1.8 and hs >= 1:
-                    head_res["triggered"] = True
-
+                # Gestures must strictly satisfy the 7-10s timeline before triggering
                 if sos_hits >= hand_temporal_hits_required:
                     if (frame_ts - _hand_last_ts.get(tid, -1e9)) >= hand_cooldown:
                         is_pose_fused = bool(
@@ -507,7 +504,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                 if head_res.get("triggered"):
                     is_spatial_pose_dup = spatial_dedup.should_suppress("pose_sos", cx, cy, frame_ts, cooldown_sec=pose_cooldown)
                     hand_recently_emitted = (frame_ts - _hand_last_ts.get(tid, -1e9)) < 10.0
-                    if (frame_ts - _pose_last_ts.get(tid, -1e9)) >= pose_cooldown and not is_spatial_dup and not hand_recently_emitted:
+                    if (frame_ts - _pose_last_ts.get(tid, -1e9)) >= pose_cooldown and not is_spatial_pose_dup and not hand_recently_emitted:
                         is_hand_co_active = bool(hs >= 1 or hand_consec3.get(tid, 0) >= 1)
                         held_s = head_res.get('time_held', 0.0)
                         g_opt = head_res.get('gesture_option', 'hands_overhead_v')
@@ -606,11 +603,12 @@ def main():
             if not evs:
                 f.write("*No alerts triggered (clean pass)*\n\n")
                 continue
-            f.write("| Time (s) | Type | Label | Track ID | Confidence | Snapshot |\n")
-            f.write("|---|---|---|---|---|---|\n")
+            f.write("| Time (s) | Type | Label | Track ID | Event Conf | Person Conf | Snapshot |\n")
+            f.write("|---|---|---|---|---|---|---|\n")
             for e in evs:
                 snap_link = f"[{Path(e['snapshot']).name}]({e['snapshot']})" if e.get("snapshot") else "-"
-                f.write(f"| {e['timestamp_sec']}s | `{e['event_type']}` | {e['label']} | {e['track_id']} | {e['confidence']} | {snap_link} |\n")
+                p_conf = e.get("person_confidence", "-")
+                f.write(f"| {e['timestamp_sec']}s | `{e['event_type']}` | {e['label']} | {e['track_id']} | {e['confidence']} | {p_conf} | {snap_link} |\n")
             f.write("\n")
 
     print(f"\n🎉 All videos scanned! Report saved to:\n  - {md_path}\n  - {json_path}")
