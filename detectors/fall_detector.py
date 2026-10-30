@@ -237,7 +237,8 @@ class FallDetector:
                 if avg_head_y < avg_sh_y and avg_sh_y <= avg_hip_y:
                     head_to_hip = avg_hip_y - avg_head_y
                     if head_to_hip >= 0.30 * box_h and avg_hip_y >= y1 + 0.50 * box_h:
-                        return True
+                        if not knee_ys or (sum(knee_ys) / len(knee_ys) <= avg_hip_y + 0.15 * box_h):
+                            return True
 
             if ratio >= 1.70:
                 return False
@@ -376,6 +377,30 @@ class FallDetector:
         cy  = (y1 + y2) / 2.0
         h_pixels = float(h) if h else 1.0
 
+        # ── Standing height calibration & Stature Collapse Tracking ──
+        bbox_h      = y2 - y1
+        bbox_h_norm = bbox_h / h_pixels if h_pixels else 0.0
+
+        hh = self._height_hist.get(tid)
+        if hh is None:
+            hh = deque(maxlen=self.history_len)
+            self._height_hist[tid] = hh
+        hh.append(bbox_h_norm)
+
+        current_max = float(max(hh))
+        if current_max > 0.18:  # sanity: must look like a standing person
+            prev = self._stand_height.get(tid, 0.0)
+            if current_max > prev:
+                self._stand_height[tid] = current_max
+
+        stand_h = self._stand_height.get(tid)
+        was_down = bool(tid in self._ground_time or tid in self._since)
+        thresh_factor = 0.88 if was_down else 0.84
+        # Stature collapse: height collapsed by >= 16% (or 12% if already down) with wide ratio
+        detect_lying_height = bool(
+            stand_h and (bbox_h_norm <= stand_h * thresh_factor) and (ratio >= 0.66 or angle < self.lying_angle_thresh)
+        )
+
         # [Day 3] Anatomical Hard Clamp:
         # A person lying on the ground CANNOT have an upright spine (angle >= 60.0°).
         # When confident torso keypoints exist and the spine is vertical, the person is
@@ -384,9 +409,12 @@ class FallDetector:
         # Genuine upright standing requires:
         # - angle >= 60.0 deg
         # - shoulders clearly above hips (torso_dy >= 0.04 * h_pixels, e.g. >= 43px in 1080p)
-        # - aspect ratio characteristic of standing (ratio <= 0.85)
-        is_upright = bool(has_pose and (angle >= 60.0) and (torso_dy >= 0.04 * h_pixels) and (ratio <= 0.85))
-        is_vert_bbox = bool(ratio <= 0.65 and (y2 - y1) >= 0.18 * h_pixels)
+        # - aspect ratio characteristic of standing (ratio <= 0.80)
+        # - stature has NOT collapsed (not detect_lying_height)
+        is_upright = bool(
+            has_pose and (angle >= 60.0) and (torso_dy >= 0.04 * h_pixels) and (ratio <= 0.80) and not detect_lying_height
+        )
+        is_vert_bbox = bool(ratio <= 0.65 and (y2 - y1) >= 0.18 * h_pixels and not detect_lying_height)
 
         # Track initial appearance posture
         if tid not in self._initial_posture_lying:
@@ -408,7 +436,7 @@ class FallDetector:
         avg_abs_v_norm = avg_abs_v / h_pixels
 
         detect_spike = last_v_norm > self.spike_thresh_norm
-        if detect_spike:
+        if detect_spike or detect_lying_height:
             self._has_fall_transition[tid] = True
 
         if self._was_upright.get(tid, False) and (angle <= self.lying_angle_thresh or ratio >= self.bbox_thresh):
@@ -419,6 +447,8 @@ class FallDetector:
         # ════════════════════════════════════════════════════════════════
         if is_upright:
             is_down_basic = False
+        elif detect_lying_height:
+            is_down_basic = True
         elif has_pose:
             # Torso is tilted: angle < angle_thresh (55°) OR strongly horizontal bbox with non-vertical spine
             is_down_basic = (angle < self.angle_thresh) or (ratio >= self.geometry_ratio_thresh and angle < 45.0)
@@ -490,8 +520,8 @@ class FallDetector:
         )
 
         # ── Posture classification checks ──
-        is_sitting = self._is_sitting(kps, bbox)
-        is_crouching = self._is_crouching_or_bending(kps, bbox)
+        is_sitting = bool(self._is_sitting(kps, bbox) and not detect_lying_height)
+        is_crouching = bool(self._is_crouching_or_bending(kps, bbox) and not detect_lying_height)
 
         if is_upright or is_sitting:
             is_down = False
@@ -513,6 +543,7 @@ class FallDetector:
                 or geometry_down
                 or slow_fall_fallback   # FIX 2
                 or model_confident_lying  # NEW: model says laying → count as down
+                or detect_lying_height
             )
 
         # ── Debug logging: per-track signal breakdown ──
@@ -538,36 +569,6 @@ class FallDetector:
                 self._spike_time.pop(tid, None)
 
         # ════════════════════════════════════════════════════════════════
-        # STAGE 4 — Standing height calibration
-        #
-        # FIX 3: Original code froze stand_h from the median of the first
-        # 3 frames. If those frames caught the person crouching/sitting,
-        # stand_h was underestimated and detect_lying_height false-fired
-        # forever.  Now we track the rolling maximum so stand_h rises
-        # whenever we observe the person standing tall.
-        # ════════════════════════════════════════════════════════════════
-        bbox_h      = y2 - y1
-        bbox_h_norm = bbox_h / h_pixels if h_pixels else 0.0
-
-        hh = self._height_hist.get(tid)
-        if hh is None:
-            hh = deque(maxlen=self.history_len)
-            self._height_hist[tid] = hh
-        hh.append(bbox_h_norm)
-
-        # FIX 3: rolling max — update stand_h whenever we see a taller observation
-        current_max = float(max(hh))
-        if current_max > 0.18:  # sanity: must look like a standing person
-            prev = self._stand_height.get(tid, 0.0)
-            if current_max > prev:
-                self._stand_height[tid] = current_max
-
-        stand_h = self._stand_height.get(tid)
-        detect_lying_height = bool(
-            stand_h and bbox_h_norm < stand_h * 0.6 and (ratio > 0.85 or angle < self.lying_angle_thresh)
-        )
-
-        # ════════════════════════════════════════════════════════════════
         # STAGE 5 — Ground contact detection
         # ════════════════════════════════════════════════════════════════
         detect_ground = (
@@ -578,7 +579,7 @@ class FallDetector:
         )
 
         # ── Upright / Sitting / Crouch Posture Guard ──
-        if is_upright or is_sitting or (is_crouching and not detect_spike):
+        if (is_upright or is_sitting or (is_crouching and not detect_spike)) and not detect_lying_height:
             is_down = False
             detect_ground = False
             self._ground_candidate.pop(tid, None)
@@ -675,7 +676,7 @@ class FallDetector:
             )
 
         # Sitting, upright, or crouching person is never fallen
-        if is_sitting or is_upright or (is_crouching and not detect_spike):
+        if (is_sitting or is_upright or (is_crouching and not detect_spike)) and not detect_lying_height:
             is_fallen = False
             danger_lying = False
 
@@ -691,6 +692,7 @@ class FallDetector:
             or self._has_fall_transition.get(tid, False)
             or detect_spike
             or (spike_t is not None)
+            or detect_lying_height
         )
         if not has_fall_evidence:
             is_fallen = False

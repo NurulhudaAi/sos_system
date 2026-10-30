@@ -124,7 +124,7 @@ class BoxesWrapper:
 class KeypointsWrapper:
     def __init__(self,data): self.data=[_W(d) for d in data] if data else None
 
-from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator
+from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator, nms_containment
 
 
 def _api(endpoint, frame, timeout=5):
@@ -224,7 +224,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
     print(f"[{source_id[-30:]}] Connected | location={location or '?'} | cam_id={cam_id or 'default'}")
 
-    tracker = SimpleTracker(frame_w=W, frame_h=H, max_lost=TRACKER_MAX_LOST)  # [F1]
+    tracker = HungarianTracker(frame_w=W, frame_h=H, max_lost=TRACKER_MAX_LOST)
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
     head_d  =HandsOverHeadDetector(cfg.get("hands_over_head",{}))
@@ -409,6 +409,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
             # ── People tracking ──────────────────────────────────────────
             if pdets:
+                pdets = nms_containment(pdets)
                 assigned=tracker.update(pdets)
                 boxes=BoxesWrapper([d["bbox"] for d in assigned],
                                    [d.get("conf",0.0) for d in assigned],

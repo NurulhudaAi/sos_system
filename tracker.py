@@ -231,3 +231,31 @@ class SpatialAlertDeduplicator:
         # Not duplicate -> record this alert
         self._history[event_type].append((cx, cy, now_ts))
         return False
+
+
+def nms_containment(dets: List[Dict[str, Any]], thresh: float = 0.65) -> List[Dict[str, Any]]:
+    """Suppresses nested/contained person detections (e.g. upper-body inside full-body)."""
+    if len(dets) <= 1:
+        return dets
+    sorted_dets = sorted(
+        dets,
+        key=lambda d: (d['bbox'][2] - d['bbox'][0]) * (d['bbox'][3] - d['bbox'][1]),
+        reverse=True,
+    )
+    kept = []
+    for d in sorted_dets:
+        b1 = d['bbox']
+        area1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
+        contained = False
+        for k in kept:
+            b2 = k['bbox']
+            ix1, iy1 = max(b1[0], b2[0]), max(b1[1], b2[1])
+            ix2, iy2 = min(b1[2], b2[2]), min(b1[3], b2[3])
+            iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+            inter = iw * ih
+            if inter / (area1 + 1e-6) >= thresh:
+                contained = True
+                break
+        if not contained:
+            kept.append(d)
+    return kept

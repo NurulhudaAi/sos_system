@@ -82,6 +82,30 @@ def api_detect_all(frame, timeout=5):
     return {"people": [], "objects": []}
 
 
+def nms_containment(dets, thresh=0.65):
+    """Suppresses nested/contained person detections (e.g. upper-body inside full-body)."""
+    if len(dets) <= 1:
+        return dets
+    sorted_dets = sorted(dets, key=lambda d: (d['bbox'][2]-d['bbox'][0])*(d['bbox'][3]-d['bbox'][1]), reverse=True)
+    kept = []
+    for d in sorted_dets:
+        b1 = d['bbox']
+        area1 = (b1[2]-b1[0])*(b1[3]-b1[1])
+        contained = False
+        for k in kept:
+            b2 = k['bbox']
+            ix1, iy1 = max(b1[0], b2[0]), max(b1[1], b2[1])
+            ix2, iy2 = min(b1[2], b2[2]), min(b1[3], b2[3])
+            iw, ih = max(0, ix2-ix1), max(0, iy2-iy1)
+            inter = iw * ih
+            if inter / (area1 + 1e-6) >= thresh:
+                contained = True
+                break
+        if not contained:
+            kept.append(d)
+    return kept
+
+
 def save_snapshot_all_persons(snap_path, frame, all_assigned, alert_tid, alert_label, alert_color):
     """Draws bounding boxes for EVERY person detected in the frame:
     - Neutral people: gray box with [tid=X]
@@ -269,7 +293,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
         frame_clahe = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
         resp = api_detect_all(frame)
-        pdets = resp.get("people", [])
+        pdets = nms_containment(resp.get("people", []))
         odets = resp.get("objects", [])
 
         assigned = tracker.update(pdets) if pdets else []

@@ -10,13 +10,13 @@ cameras:
 
   E1-Hall 1:
     zones:
-      - name: "corridor_bench_exclusion"
+      - name: "table_seating_exclusion"
         exclusion: true
         detectors: ["fall"]
-        x1: 0.38
-        y1: 0.32
-        x2: 0.55
-        y2: 0.54
+        x1: 0.44
+        y1: 0.30
+        x2: 0.75
+        y2: 0.85
 
   # ───────────────────────────────────────────────────────────────
   # ตัวอย่าง zone สำหรับมหาวิทยาลัย — ปรับ left_behind / theft ตาม
