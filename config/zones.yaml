@@ -8,6 +8,16 @@ cameras:
         y2: 1.0
         # ไม่ override → ใช้ค่า default จาก thresholds.yaml
 
+  E1-Hall 1:
+    zones:
+      - name: "corridor_bench_exclusion"
+        exclusion: true
+        detectors: ["fall"]
+        x1: 0.38
+        y1: 0.32
+        x2: 0.55
+        y2: 0.54
+
   # ───────────────────────────────────────────────────────────────
   # ตัวอย่าง zone สำหรับมหาวิทยาลัย — ปรับ left_behind / theft ตาม
   # ลักษณะพื้นที่: ความหนาแน่นคน + มูลค่าของที่มักถูกลืม/ขโมย

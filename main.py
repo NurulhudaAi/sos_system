@@ -462,7 +462,16 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
             # cleanup ยึด grace period เดียวกับที่ tracker ใช้จริง
             if boxes and boxes.id:
                 alive = set(tracker.tracks.keys())
-                dropped = (set(hand_states.keys()) | set(head_d._since.keys()) | set(active_fall_alerts.keys())) - alive
+                known_tracks = (
+                    set(fall_d._was_upright.keys())
+                    | set(fall_d._since.keys())
+                    | set(fall_d._hist.keys())
+                    | set(hand_states.keys())
+                    | set(head_d._since.keys())
+                    | set(active_fall_alerts.keys())
+                    | set(fall_ev.keys())
+                )
+                dropped = known_tracks - alive
                 for tid in dropped:
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
                     head_d.cleanup_track(tid)

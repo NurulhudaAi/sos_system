@@ -105,6 +105,11 @@ class FallDetector:
         self._lying_geom_since = {}   # when strong geometry first persisted
         self._recovered_short  = {}   # timestamp of quick recovery (trip suppression)
 
+        # Pre-existing static resting vs dynamic fall transition tracking
+        self._was_upright           = {}   # tid -> bool (ever observed standing/upright)
+        self._initial_posture_lying = {}   # tid -> bool (appeared already horizontal on first frames)
+        self._has_fall_transition   = {}   # tid -> bool (experienced dynamic fall transition / collapse)
+
         # NEW: last confidently-measured spine angle per track, so a
         # frame with missing/low-confidence keypoints doesn't silently
         # fall back to "90° = standing" and disable the angle signal.
@@ -139,6 +144,9 @@ class FallDetector:
             self._last_angle,
             self._last_angle_time,
             self._model_lying_since,
+            self._was_upright,
+            self._initial_posture_lying,
+            self._has_fall_transition,
         ):
             d.pop(tid, None)
         logger.debug("cleanup_track: cleared state for tid=%s", tid)
@@ -347,10 +355,12 @@ class FallDetector:
         lh, rh = _kp(kps, L_HIP),     _kp(kps, R_HIP)
         has_pose = _vis(ls) and _vis(rs) and _vis(lh) and _vis(rh)
 
+        torso_dy = 0.0
         if has_pose:
             sh = np.array([(ls[0] + rs[0]) / 2, (ls[1] + rs[1]) / 2])
             hp = np.array([(lh[0] + rh[0]) / 2, (lh[1] + rh[1]) / 2])
             d  = sh - hp
+            torso_dy = hp[1] - sh[1]  # positive when shoulders are clearly above hips
             angle = abs(np.degrees(np.arctan2(abs(d[1]), abs(d[0]) + 1e-6)))
             self._last_angle[tid] = angle
             self._last_angle_time[tid] = now
@@ -371,7 +381,24 @@ class FallDetector:
         # When confident torso keypoints exist and the spine is vertical, the person is
         # standing/walking/waiting. Lower-body occlusion (by desks, railings, or lift doors)
         # must NEVER cause an upright person to be declared fallen.
-        is_upright = bool(has_pose and (angle >= 60.0))
+        # Genuine upright standing requires:
+        # - angle >= 60.0 deg
+        # - shoulders clearly above hips (torso_dy >= 0.04 * h_pixels, e.g. >= 43px in 1080p)
+        # - aspect ratio characteristic of standing (ratio <= 0.85)
+        is_upright = bool(has_pose and (angle >= 60.0) and (torso_dy >= 0.04 * h_pixels) and (ratio <= 0.85))
+        is_vert_bbox = bool(ratio <= 0.65 and (y2 - y1) >= 0.18 * h_pixels)
+
+        # Track initial appearance posture
+        if tid not in self._initial_posture_lying:
+            # First time track is seen: check if already in a resting/lying posture
+            is_init_lying = bool(ratio >= 1.25 or (has_pose and angle <= 35.0))
+            self._initial_posture_lying[tid] = is_init_lying
+            self._was_upright[tid] = bool(is_upright or is_vert_bbox)
+            self._has_fall_transition[tid] = False
+
+        if is_upright or is_vert_bbox:
+            self._was_upright[tid] = True
+            self._initial_posture_lying[tid] = False  # cleared if ever observed standing upright
 
         # ── Velocity history ──
         dq = self._update_hist(tid, now, cy)
@@ -379,6 +406,13 @@ class FallDetector:
         avg_abs_v      = float(np.mean(np.abs(vels))) if vels else 0.0
         last_v_norm    = last_v    / h_pixels
         avg_abs_v_norm = avg_abs_v / h_pixels
+
+        detect_spike = last_v_norm > self.spike_thresh_norm
+        if detect_spike:
+            self._has_fall_transition[tid] = True
+
+        if self._was_upright.get(tid, False) and (angle <= self.lying_angle_thresh or ratio >= self.bbox_thresh):
+            self._has_fall_transition[tid] = True
 
         # ════════════════════════════════════════════════════════════════
         # STAGE 1 — Geometry signals
@@ -642,6 +676,23 @@ class FallDetector:
 
         # Sitting, upright, or crouching person is never fallen
         if is_sitting or is_upright or (is_crouching and not detect_spike):
+            is_fallen = False
+            danger_lying = False
+
+        # ── Pre-existing resting/lying on furniture suppression ──
+        # A true Fall requires evidence of a fall event:
+        # Either the person was observed standing/upright prior to being down,
+        # or they experienced a downward velocity spike / impact,
+        # or a dynamic stature collapse transition.
+        # A static/resting person on a bench or chair who was never seen standing
+        # and had no velocity spike did NOT suffer a fall event.
+        has_fall_evidence = bool(
+            self._was_upright.get(tid, False)
+            or self._has_fall_transition.get(tid, False)
+            or detect_spike
+            or (spike_t is not None)
+        )
+        if not has_fall_evidence:
             is_fallen = False
             danger_lying = False
 

@@ -132,35 +132,64 @@ class ZoneManager:
     def in_zone(self, cx: float, cy: float, detector_type: Optional[str] = None) -> bool:
         """Check if point (cx, cy) is inside a valid zone for detector_type.
 
+        Supports both inclusion and exclusion zones.
         If no zones are configured for this camera, returns True (full frame active).
         """
         if not self.zones:
             return True
 
-        has_matching_zone = False
-
+        # 1. First check exclusion zones: if inside an exclusion zone, reject immediately
         for i, z in enumerate(self.zones):
+            if not z.get("exclusion", False) and z.get("type") != "exclusion":
+                continue
             allowed = z.get("detectors")
             if allowed and isinstance(allowed, list) and len(allowed) > 0:
                 if detector_type and detector_type not in allowed and "all" not in allowed:
                     continue
-
-            has_matching_zone = True
             poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
             if poly is not None:
-                # cv2.pointPolygonTest: >= 0 means inside or on edge
                 if cv2.pointPolygonTest(poly, (float(cx), float(cy)), False) >= 0:
-                    return True
+                    return False
             else:
                 x1 = float(z.get("x1", 0.0))
                 y1 = float(z.get("y1", 0.0))
                 x2 = float(z.get("x2", 1.0))
                 y2 = float(z.get("y2", 1.0))
                 if x1 <= cx <= x2 and y1 <= cy <= y2:
-                    return True
+                    return False
 
-        # If matching zones were checked but none contained the point
-        return False
+        # 2. Check inclusion zones
+        has_inclusion_zone = False
+        inside_any_inclusion = False
+
+        for i, z in enumerate(self.zones):
+            if z.get("exclusion", False) or z.get("type") == "exclusion":
+                continue
+            allowed = z.get("detectors")
+            if allowed and isinstance(allowed, list) and len(allowed) > 0:
+                if detector_type and detector_type not in allowed and "all" not in allowed:
+                    continue
+
+            has_inclusion_zone = True
+            poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
+            if poly is not None:
+                if cv2.pointPolygonTest(poly, (float(cx), float(cy)), False) >= 0:
+                    inside_any_inclusion = True
+                    break
+            else:
+                x1 = float(z.get("x1", 0.0))
+                y1 = float(z.get("y1", 0.0))
+                x2 = float(z.get("x2", 1.0))
+                y2 = float(z.get("y2", 1.0))
+                if x1 <= cx <= x2 and y1 <= cy <= y2:
+                    inside_any_inclusion = True
+                    break
+
+        if has_inclusion_zone:
+            return inside_any_inclusion
+
+        # If no inclusion zones configured (only exclusion zones exist), default to True
+        return True
 
     def draw(self, frame: np.ndarray, color: tuple = (255, 255, 0)) -> None:
         """Draw zone boundaries and detector tags on the video frame."""

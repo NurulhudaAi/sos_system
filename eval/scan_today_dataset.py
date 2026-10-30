@@ -67,6 +67,7 @@ def _are_both_arms_over_head(kps, conf_thresh=0.25):
 
 
 from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator
+from pipeline import ZoneManager
 
 
 
@@ -207,6 +208,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
 
     W, H = 1920, 1080
     tracker = HungarianTracker(frame_w=W, frame_h=H)
+    zones = ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=video_path.stem)
     spatial_dedup = SpatialAlertDeduplicator(radius_norm=0.12, default_cooldown_sec=30.0)
     fall_d = FallDetector(fall_cfg)
     hand_d = HandSOSDetector(hand_cfg)
@@ -291,7 +293,16 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
 
         # Cleanup lost tracks
         alive = set(tracker.tracks.keys())
-        dropped = (set(hand_states.keys()) | set(head_d._since.keys()) | set(active_fall_alerts.keys())) - alive
+        known_tracks = (
+            set(fall_d._was_upright.keys())
+            | set(fall_d._since.keys())
+            | set(fall_d._hist.keys())
+            | set(hand_states.keys())
+            | set(head_d._since.keys())
+            | set(active_fall_alerts.keys())
+            | set(fall_ev.keys())
+        )
+        dropped = known_tracks - alive
         for tid in dropped:
             fall_d.cleanup_track(tid)
             head_d.cleanup_track(tid)
@@ -328,8 +339,12 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
             cx = (bbox[0] + bbox[2]) / 2.0 / w
             cy = (bbox[1] + bbox[3]) / 2.0 / h
 
-            # 1. Fall Detection
-            fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=frame_ts)
+            # 1. Fall Detection (gated by ZoneManager exclusion/inclusion)
+            in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
+            if in_fall_zone:
+                fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=frame_ts)
+            else:
+                fr = {"is_fallen": False, "danger_lying": False, "is_critical": False, "is_down": False}
             is_critical = fr.get("is_critical") and not fr.get("recovered_quickly")
             is_confirmed = (fr.get("is_fallen") or fr.get("danger_lying")) and not fr.get("recovered_quickly")
             is_down = fr.get("is_down", False)

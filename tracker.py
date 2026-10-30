@@ -121,9 +121,11 @@ class HungarianTracker:
                 for j, d_idx in enumerate(unmatched_det_indices):
                     d_center = self._box_center(dets[d_idx]["bbox"])
                     dist_norm = self._dist_norm((pred_cx, pred_cy), d_center)
-                    # Gating threshold
-                    if dist_norm > self.max_dist_norm:
-                        dist_cost[i, j] = 1000.0  # Prohibit match
+                    dx_norm = abs(pred_cx - d_center[0]) / max(1.0, float(self.frame_w))
+                    # Gating threshold: Fall/collapse occurs in place (dx_norm <= 0.08)
+                    # and overall movement is within max_dist_norm (0.10)
+                    if dist_norm > min(0.10, self.max_dist_norm) or dx_norm > 0.08:
+                        dist_cost[i, j] = 1000.0  # Prohibit match across distant people
                     else:
                         dist_cost[i, j] = dist_norm
 
