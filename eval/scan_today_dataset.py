@@ -366,7 +366,8 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
             # 1. Fall Detection (gated by ZoneManager exclusion/inclusion)
             in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
             if in_fall_zone:
-                fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=frame_ts)
+                fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=frame_ts,
+                                    on_furniture=bool(zones.furniture_at(kps, bbox, w, h)))
             else:
                 fr = {"is_fallen": False, "danger_lying": False, "is_critical": False, "is_down": False}
             is_critical = fr.get("is_critical") and not fr.get("recovered_quickly")

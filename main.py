@@ -523,7 +523,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         fr=fall_d.process(tid,kp,bbox,h,w,
                                            posture_class=posture_class,
                                            posture_conf=posture_conf,  # [F2]
-                                           timestamp=frame_ts)          # [QA-P0-4]
+                                           timestamp=frame_ts,          # [QA-P0-4]
+                                           on_furniture=bool(zones.furniture_at(kp, bbox, w, h)))
                     else:
                         fr={"is_fallen":False, "danger_lying":False, "is_critical":False}
 

@@ -129,17 +129,61 @@ class ZoneManager:
         self._compiled_polys = new_compiled
         logger.info(f"[ZoneManager] Active zones for '{self.cam_id}': {len(self.zones)}")
 
+    @staticmethod
+    def _is_furniture(z: Dict[str, Any]) -> bool:
+        """Furniture zones (bench/bed/sofa) are NOT inclusion/exclusion zones.
+        Detection stays active everywhere; they only tell the fall detector that a
+        person lying inside them is resting on furniture, not lying on the floor."""
+        return z.get("type") == "furniture" or bool(z.get("furniture", False))
+
+    def _point_in(self, i: int, z: Dict[str, Any], cx: float, cy: float) -> bool:
+        poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
+        if poly is not None:
+            return cv2.pointPolygonTest(poly, (float(cx), float(cy)), False) >= 0
+        x1 = float(z.get("x1", 0.0)); y1 = float(z.get("y1", 0.0))
+        x2 = float(z.get("x2", 1.0)); y2 = float(z.get("y2", 1.0))
+        return x1 <= cx <= x2 and y1 <= cy <= y2
+
+    def furniture_at(self, kps, bbox, w: int, h: int) -> Optional[str]:
+        """Return the furniture zone name if the person's body anchor lies inside one.
+
+        Anchor = hip midpoint (most reliable for "what is the body resting on");
+        falls back to the bbox centre when hips are not visible.
+        Coordinates are normalised (0..1) like all other zones.
+        """
+        if not self.zones or w <= 0 or h <= 0:
+            return None
+        ax = ay = None
+        try:
+            hips = [kps[i] for i in (11, 12) if i < len(kps) and float(kps[i][2]) >= 0.25]
+            if hips:
+                ax = sum(float(p[0]) for p in hips) / len(hips)
+                ay = sum(float(p[1]) for p in hips) / len(hips)
+        except Exception:
+            pass
+        if ax is None:
+            ax = (bbox[0] + bbox[2]) / 2.0
+            ay = (bbox[1] + bbox[3]) / 2.0
+        nx, ny = ax / float(w), ay / float(h)
+        for i, z in enumerate(self.zones):
+            if self._is_furniture(z) and self._point_in(i, z, nx, ny):
+                return z.get("name") or f"furniture-{i+1}"
+        return None
+
     def in_zone(self, cx: float, cy: float, detector_type: Optional[str] = None) -> bool:
         """Check if point (cx, cy) is inside a valid zone for detector_type.
 
         Supports both inclusion and exclusion zones.
         If no zones are configured for this camera, returns True (full frame active).
+        Furniture zones are ignored here (they never disable detection).
         """
         if not self.zones:
             return True
 
         # 1. First check exclusion zones: if inside an exclusion zone, reject immediately
         for i, z in enumerate(self.zones):
+            if self._is_furniture(z):
+                continue
             if not z.get("exclusion", False) and z.get("type") != "exclusion":
                 continue
             allowed = z.get("detectors")
@@ -163,6 +207,8 @@ class ZoneManager:
         inside_any_inclusion = False
 
         for i, z in enumerate(self.zones):
+            if self._is_furniture(z):
+                continue
             if z.get("exclusion", False) or z.get("type") == "exclusion":
                 continue
             allowed = z.get("detectors")
@@ -196,10 +242,15 @@ class ZoneManager:
         if not self.zones:
             return
         h, w = frame.shape[:2]
+        base_color = color
         for i, z in enumerate(self.zones):
             name = z.get("name") or z.get("label", f"Zone-{i+1}")
             dets = z.get("detectors")
             tag = f"{name} ({','.join(dets)})" if dets else name
+            if self._is_furniture(z):
+                color, tag = (200, 120, 255), f"[FURNITURE] {name}"
+            else:
+                color = base_color
 
             poly = self._compiled_polys[i] if i < len(self._compiled_polys) else None
             if poly is not None:

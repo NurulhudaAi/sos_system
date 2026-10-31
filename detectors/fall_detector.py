@@ -344,7 +344,7 @@ class FallDetector:
 
     def process(self, tid: int, kps, bbox, h: int, w: int,
                 posture_class=None, posture_conf: float = 0.0,
-                timestamp: float = None) -> dict:
+                timestamp: float = None, on_furniture: bool = False) -> dict:
         """Process one detection for track `tid` and return a result dict.
 
         Parameters
@@ -361,6 +361,11 @@ class FallDetector:
         posture_conf  : confidence for posture_class (0.0 if not available)
         timestamp     : optional float (video seconds for evaluation / playback;
                         defaults to time.time() for live stream)
+        on_furniture  : True if the person's hip anchor lies inside a configured
+                        furniture zone (bench/bed/sofa). Lying there is treated
+                        as resting: fall timers are reset and no fall is emitted.
+                        Leaving the furniture (e.g. falling off it) restarts
+                        normal floor-based detection.
         """
         now = timestamp if timestamp is not None else time.time()
         x1, y1, x2, y2 = bbox
@@ -774,6 +779,24 @@ class FallDetector:
             )
         )
 
+        # ── Furniture guard (bench / bed / sofa zone) ──
+        # Lying on furniture is resting, not a floor fall. Reset all down/ground
+        # timers so that if the person later ends up on the floor (e.g. falls off
+        # the bench) the 4s confirm window starts fresh from the floor.
+        if on_furniture:
+            is_down = False
+            is_fallen = False
+            danger_lying = False
+            is_critical = False
+            ground_t = None
+            time_lying = None
+            time_down_val = 0.0
+            self._since.pop(tid, None)
+            self._ground_candidate.pop(tid, None)
+            self._ground_time.pop(tid, None)
+            self._lying_geom_since.pop(tid, None)
+            self._model_lying_since.pop(tid, None)
+
         # ── Event Confidence (Fall Certainty) ──
         event_conf = 0.0
         if is_fallen or is_down:
@@ -790,6 +813,7 @@ class FallDetector:
             "is_fallen":             bool(is_fallen),
             "is_down":               bool(is_down),
             "has_fall_evidence":     bool(has_fall_evidence),
+            "on_furniture":          bool(on_furniture),
             "is_sitting":            bool(is_sitting),
             "is_crouching":          bool(is_crouching),
             "time_down":             round(time_down_val, 1),

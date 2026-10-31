@@ -43,6 +43,7 @@ from detectors.hand_sos_detector import HandSOSDetector
 from tracker import HungarianTracker
 from stream_reader import LatestFrameReader
 from utils import preprocess, create_bbox_snapshot_base64
+from pipeline import ZoneManager
 import database as db_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -304,7 +305,7 @@ def start_web_server(port=8081):
         return None
 
 
-def run_live_stream(source, port=8081, send_db=True):
+def run_live_stream(source, port=8081, send_db=True, cam_id="default"):
     global latest_annotated_jpeg, recent_alerts
     start_web_server(port=port)
 
@@ -313,6 +314,9 @@ def run_live_stream(source, port=8081, send_db=True):
     fall_cfg = cfg.get("fall", {})
     hand_cfg = cfg.get("hand_sos", {})
     pose_cfg = cfg.get("hands_over_head", {})
+    # Furniture zones (bench/bed/sofa) per camera from config/zones.yaml
+    zones = ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=cam_id)
+    logger.info(f"Zones loaded for cam_id={cam_id!r}: {len(zones.zones)} (send_db={send_db})")
 
     tracker = HungarianTracker(frame_w=1920, frame_h=1080, max_lost=30)
     fall_d = FallDetector(fall_cfg)
@@ -408,7 +412,8 @@ def run_live_stream(source, port=8081, send_db=True):
             cx, cy = (x1 + x2) / 2.0 / w, (y1 + y2) / 2.0 / h
 
             # Process Fall
-            fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=elapsed_sec)
+            fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=elapsed_sec,
+                                on_furniture=bool(zones.furniture_at(kps, bbox, w, h)))
             is_critical = fr.get("is_critical") and not fr.get("recovered_quickly")
             is_confirmed = (fr.get("is_fallen") or fr.get("danger_lying")) and not fr.get("recovered_quickly")
             is_down = fr.get("is_down", False)
@@ -606,6 +611,9 @@ def run_live_stream(source, port=8081, send_db=True):
                 box_color = (0, 140, 255)  # Orange warning
                 down_sec = elapsed_sec - fall_first_down_ts[tid]
                 status_tag = f"ID:{tid} [FALL PENDING: {down_sec:.1f}s/4.0s]"
+            elif fr.get("on_furniture") and not fr.get("is_sitting"):
+                box_color = (200, 120, 255)
+                status_tag = f"ID:{tid} [ON FURNITURE / RESTING]"
             elif is_down and not has_fall_evidence:
                 # Static resting on furniture (bench/couch/bed) — NOT a fall!
                 box_color = (180, 180, 180)  # Neutral gray
@@ -655,8 +663,9 @@ def run_live_stream(source, port=8081, send_db=True):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live Camera SOS Stream & Monitor")
     parser.add_argument("--source", "-s", type=str, default="0", help="Camera index (e.g. 0) or RTSP URL")
+    parser.add_argument("--cam-id", "-c", type=str, default="boonsong_fl2", help="Camera identifier in config/zones.yaml")
     parser.add_argument("--port", "-p", type=int, default=8081, help="Web stream port (default 8081)")
     parser.add_argument("--send-db", action="store_true", default=True, help="Send alerts to MongoDB Atlas")
     args = parser.parse_args()
 
-    run_live_stream(args.source, port=args.port, send_db=args.send_db)
+    run_live_stream(args.source, port=args.port, send_db=args.send_db, cam_id=args.cam_id)
