@@ -431,14 +431,16 @@ class FallDetector:
 
         # Stature collapse: height collapsed by >= 16% (or 12% if already down) compared to KNOWN standing height
         # ONLY valid if the person was actually calibrated standing (stand_h is not None and _was_upright is True)
+        # AND their torso has tilted/collapsed horizontally (angle < 55.0 or wide horizontal body ratio >= 1.15)
+        # A person crouching/squatting upright (e.g. angle >= 60.0) is NOT a fallen body.
         detect_lying_height = bool(
             stand_h is not None and self._was_upright.get(tid, False)
             and (bbox_h_norm <= stand_h * thresh_factor)
-            and (ratio >= 0.66 or angle < self.lying_angle_thresh)
+            and (angle < 55.0 or (ratio >= 1.15 and angle < 60.0))
         )
 
         is_sitting = bool(is_sitting_geom and not detect_lying_height)
-        is_crouching = bool(is_crouching_geom and not detect_lying_height)
+        is_crouching = bool(is_crouching_geom)
         is_upright = bool(is_upright_now and not detect_lying_height)
         is_vert_bbox = bool(is_vert_bbox_now and not detect_lying_height)
 
@@ -535,7 +537,7 @@ class FallDetector:
 
         # ── Posture classification checks ──
         is_sitting = bool(is_sitting_geom and not detect_lying_height)
-        is_crouching = bool(self._is_crouching_or_bending(kps, bbox) and not detect_lying_height)
+        is_crouching = bool(self._is_crouching_or_bending(kps, bbox))
 
         if is_upright or is_sitting:
             is_down = False
@@ -599,7 +601,7 @@ class FallDetector:
             and not detect_lying_height
         )
 
-        if is_sitting or has_upright_torso or is_upright or ((is_crouching and not detect_spike) and not detect_lying_height):
+        if is_sitting or has_upright_torso or is_upright or (is_crouching and not detect_spike):
             is_down = False
             detect_ground = False
             self._ground_candidate.pop(tid, None)
@@ -697,7 +699,7 @@ class FallDetector:
             )
 
         # Sitting, upright, or crouching person is never fallen
-        if is_sitting or has_upright_torso or is_upright or ((is_crouching and not detect_spike) and not detect_lying_height):
+        if is_sitting or has_upright_torso or is_upright or (is_crouching and not detect_spike):
             is_fallen = False
             danger_lying = False
             is_critical = False
