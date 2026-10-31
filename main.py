@@ -230,7 +230,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     head_d  =HandsOverHeadDetector(cfg.get("hands_over_head",{}))
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
     active_cam_id = cam_id or location or "default"
-    zones   =ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=active_cam_id, db=db_module)
+    zones   =ZoneManager(cam_id=active_cam_id, db=db_module)
     viz     =Visualizer()
     spatial_dedup = SpatialAlertDeduplicator(radius_norm=0.12, default_cooldown_sec=30.0)
 

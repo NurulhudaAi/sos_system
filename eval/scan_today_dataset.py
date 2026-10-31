@@ -232,7 +232,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
 
     W, H = 1920, 1080
     tracker = HungarianTracker(frame_w=W, frame_h=H)
-    zones = ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=video_path.stem)
+    zones = ZoneManager(cam_id=video_path.stem)
     spatial_dedup = SpatialAlertDeduplicator(radius_norm=0.12, default_cooldown_sec=30.0)
     fall_d = FallDetector(fall_cfg)
     hand_d = HandSOSDetector(hand_cfg)

@@ -314,9 +314,9 @@ def run_live_stream(source, port=8081, send_db=True, cam_id="default"):
     fall_cfg = cfg.get("fall", {})
     hand_cfg = cfg.get("hand_sos", {})
     pose_cfg = cfg.get("hands_over_head", {})
-    # Furniture zones (bench/bed/sofa) per camera from config/zones.yaml
-    zones = ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=cam_id)
-    logger.info(f"Zones loaded for cam_id={cam_id!r}: {len(zones.zones)} (send_db={send_db})")
+    # Zero-config Zone Manager: defaults to Full-Frame detection everywhere
+    zones = ZoneManager(cam_id=cam_id)
+    logger.info(f"Zones initialized for cam_id={cam_id!r}: {len(zones.zones)} active (send_db={send_db})")
 
     tracker = HungarianTracker(frame_w=1920, frame_h=1080, max_lost=30)
     fall_d = FallDetector(fall_cfg)
@@ -663,7 +663,7 @@ def run_live_stream(source, port=8081, send_db=True, cam_id="default"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Live Camera SOS Stream & Monitor")
     parser.add_argument("--source", "-s", type=str, default="0", help="Camera index (e.g. 0) or RTSP URL")
-    parser.add_argument("--cam-id", "-c", type=str, default="boonsong_fl2", help="Camera identifier in config/zones.yaml")
+    parser.add_argument("--cam-id", "-c", type=str, default="boonsong_fl2", help="Camera identifier for alerts and incidents")
     parser.add_argument("--port", "-p", type=int, default=8081, help="Web stream port (default 8081)")
     parser.add_argument("--send-db", action="store_true", default=True, help="Send alerts to MongoDB Atlas")
     args = parser.parse_args()

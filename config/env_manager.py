@@ -26,7 +26,7 @@ class EnvManager:
             for key, default in EnvManager.REQUIRED_VARS.items():
                 content += f"{key}={default}\n"
             env_file.write_text(content)
-            print(f"✅ Created {env_path}")
+            print(f"Created {env_path}")
 
             if require_edit:
                 print("⏳ Waiting for you to edit .env with your MongoDB connection...")
@@ -39,7 +39,7 @@ class EnvManager:
                     try:
                         mtime_after = env_file.stat().st_mtime
                         if mtime_after > mtime_before:
-                            print("✅ .env file updated, proceeding...")
+                            print(".env file updated, proceeding...")
                             break
                     except:
                         pass
@@ -68,13 +68,13 @@ class EnvManager:
 
         if not mongodb_uri or mongodb_uri == "mongodb://localhost:27017":
             raise RuntimeError(
-                "❌ MONGODB_URI not configured in .env\n"
+                "MONGODB_URI not configured in .env\n"
                 "   Edit .env with your MongoDB Atlas connection string"
             )
 
         # Basic format check
         if not mongodb_uri.startswith(("mongodb://", "mongodb+srv://")):
-            raise RuntimeError(f"❌ Invalid MONGODB_URI format: {mongodb_uri}")
+            raise RuntimeError(f"Invalid MONGODB_URI format: {mongodb_uri}")
 
         return True
 
@@ -129,5 +129,5 @@ def init_env(env_path=".env", require_edit=True):
         EnvManager.show_config()
         return True
     except Exception as e:
-        print(f"❌ Environment initialization failed: {e}")
+        print(f"Environment initialization failed: {e}")
         return False
