@@ -436,13 +436,20 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                             ev_uuid = _dispatch_to_db("Fall", lbl, event_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
                         active_fall_alerts[tid] = {"uuid": ev_uuid, "alert_ts": frame_ts, "recovered": False}
             else:
-                # If person recovered during 5s recovery window
-                if fr.get("recovered_quickly") or (not is_down and not fr.get("is_fallen")):
+                # If person recovered during 5s recovery window (requires genuine upright standing posture or sitting)
+                is_recovery_stand = bool(
+                    fr.get("recovered_quickly")
+                    or fr.get("is_sitting")
+                    or (not is_down and not fr.get("is_fallen") and fr.get("spine_angle", 0) >= 60.0)
+                )
+                if is_recovery_stand:
                     if tid in fall_first_down_ts and (frame_ts - fall_first_down_ts[tid]) < fall_dispatch_delay:
                         print(f"  ℹ️ [{frame_ts:6.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
-                        fall_first_down_ts.pop(tid, None)
-                if not fr.get("is_fallen"):
+                    fall_first_down_ts.pop(tid, None)
+                if fr.get("is_sitting") or not fr.get("is_fallen"):
                     fall_ev[tid] = False
+                if fr.get("is_sitting"):
+                    fall_first_down_ts.pop(tid, None)
 
             # 2. Distance-Adaptive & Pose SOS Processing
             is_lying = fr.get("is_fallen") or (fr.get("spine_angle") and fr.get("spine_angle") < 40.0)

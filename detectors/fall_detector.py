@@ -211,7 +211,9 @@ class FallDetector:
         box_w = max(1.0, x2 - x1)
         box_h = max(1.0, y2 - y1)
         ratio = box_w / box_h
-        if ratio >= 2.20:
+        # Standing/walking person is tall and narrow (ratio <= 0.65).
+        # A seated person on a chair/bench/desk has an aspect ratio between 0.68 and 2.0
+        if ratio < 0.68 or ratio >= 2.0:
             return False
 
         ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
@@ -228,52 +230,53 @@ class FallDetector:
         if sh_pts and hip_pts:
             avg_sh_y = sum(p[1] for p in sh_pts) / len(sh_pts)
             avg_hip_y = sum(p[1] for p in hip_pts) / len(hip_pts)
+            avg_sh_x = sum(p[0] for p in sh_pts) / len(sh_pts)
+            avg_hip_x = sum(p[0] for p in hip_pts) / len(hip_pts)
+            torso_dx = abs(avg_hip_x - avg_sh_x)
             torso_dy = avg_hip_y - avg_sh_y
+            torso_angle = abs(np.degrees(np.arctan2(torso_dy, torso_dx + 1e-6)))
+
+            # ── Check 0a: Universal Chair / Bench / Desk Sitting (full body) ──
+            # Seated on furniture: Shoulders clearly above hips, hips clearly above knees, knees clearly above ankles.
+            # In a fall on the floor, hips and knees are at the same level (knee_y - hip_y < 0.05 * box_h).
+            if knee_ys and ank_ys:
+                avg_knee_y = sum(knee_ys) / len(knee_ys)
+                avg_ank_y = sum(ank_ys) / len(ank_ys)
+                if (
+                    (avg_hip_y - avg_sh_y) >= 0.06 * box_h
+                    and (avg_knee_y - avg_hip_y) >= 0.05 * box_h
+                    and (avg_ank_y - avg_knee_y) >= 0.03 * box_h
+                    and torso_angle >= 62.0
+                ):
+                    return True
+
+            # ── Check 0b: Seated behind desk / table (ankles occluded) ──
+            if knee_ys and not ank_ys:
+                avg_knee_y = sum(knee_ys) / len(knee_ys)
+                if (
+                    (avg_hip_y - avg_sh_y) >= 0.06 * box_h
+                    and (avg_knee_y - avg_hip_y) >= 0.04 * box_h
+                    and torso_angle >= 62.0
+                ):
+                    return True
+
+            # ── Check 0c: Seated behind desk / table (both knees & ankles occluded) ──
+            if not knee_ys and not ank_ys:
+                if (avg_hip_y - avg_sh_y) >= 0.12 * box_h and torso_angle >= 62.0:
+                    if head_pts:
+                        avg_head_y = sum(p[1] for p in head_pts) / len(head_pts)
+                        if avg_head_y <= avg_sh_y:
+                            return True
 
             # ── Check 1: Sitting on floor / carpet / low mat ──
             # Upper body spans vertically across bbox: head at top, shoulders middle, hips at base.
-            if head_pts and torso_dy > 0:
+            if head_pts and (avg_hip_y - avg_sh_y) > 0:
                 avg_head_y = sum(p[1] for p in head_pts) / len(head_pts)
                 if avg_head_y < avg_sh_y and avg_sh_y <= avg_hip_y:
                     head_to_hip = avg_hip_y - avg_head_y
                     if head_to_hip >= 0.30 * box_h and avg_hip_y >= y1 + 0.50 * box_h:
                         if not knee_ys or (sum(knee_ys) / len(knee_ys) <= avg_hip_y + 0.15 * box_h):
                             return True
-
-            if ratio >= 1.70:
-                return False
-
-            if torso_dy < 0.08 * box_h:
-                return False
-
-            avg_sh_x = sum(p[0] for p in sh_pts) / len(sh_pts)
-            avg_hip_x = sum(p[0] for p in hip_pts) / len(hip_pts)
-            torso_dx = abs(avg_hip_x - avg_sh_x)
-            torso_angle = abs(np.degrees(np.arctan2(torso_dy, torso_dx + 1e-6)))
-
-            # If torso is horizontal (< 45 deg), they are lying, not sitting upright
-            if torso_angle < 45.0:
-                return False
-
-            # Check head if visible (head must be above shoulders)
-            if head_pts:
-                avg_head_y = sum(p[1] for p in head_pts) / len(head_pts)
-                if avg_head_y > avg_sh_y + 0.05 * box_h:
-                    return False
-
-            if knee_ys:
-                avg_knee_y = sum(knee_ys) / len(knee_ys)
-                # Allow knees above hips only if head is visible and clearly above shoulders
-                if avg_knee_y < avg_hip_y - 0.10 * box_h:
-                    if not (head_pts and avg_head_y < avg_sh_y):
-                        return False
-
-                if ank_ys:
-                    avg_ank_y = sum(ank_ys) / len(ank_ys)
-                    if avg_ank_y < avg_knee_y - 0.10 * box_h:
-                        return False
-
-            return True
 
         return False
 
@@ -283,9 +286,9 @@ class FallDetector:
         box_w = max(1.0, x2 - x1)
         box_h = max(1.0, y2 - y1)
         ratio = box_w / box_h
-        # A crouching person is compact vertically or square (ratio < 1.0).
-        # A person lying on the ground/stairs is wide/horizontal (ratio >= 1.0).
-        if ratio >= 1.0:
+        # Crouching/squatting is compact and squarish (0.60 <= ratio < 1.15).
+        # Standing person is tall and slender (ratio < 0.60). Lying person is wide (ratio >= 1.15).
+        if ratio < 0.60 or ratio >= 1.15:
             return False
 
         ls, rs = _kp(kps, L_SHOULDER), _kp(kps, R_SHOULDER)
@@ -308,10 +311,10 @@ class FallDetector:
             if torso_dy < 0.15 * box_h:
                 return False
 
-            # Ankles within 25% of box bottom (feet are on the ground):
-            if (y2 - avg_ank_y) <= 0.25 * box_h:
-                # Shoulders above hips and hips above or near ankles:
-                if avg_sh_y < avg_hip_y and avg_hip_y <= avg_ank_y + 0.10 * box_h:
+            # In crouching/squatting, hips are dropped down close to knee height (knees deeply bent):
+            if abs(avg_hip_y - avg_knee_y) <= 0.15 * box_h and avg_sh_y < avg_hip_y:
+                # Ankles within 30% of box bottom (feet are on the ground):
+                if (y2 - avg_ank_y) <= 0.30 * box_h:
                     return True
         return False
 
@@ -377,7 +380,6 @@ class FallDetector:
         cy  = (y1 + y2) / 2.0
         h_pixels = float(h) if h else 1.0
 
-        # ── Standing height calibration & Stature Collapse Tracking ──
         bbox_h      = y2 - y1
         bbox_h_norm = bbox_h / h_pixels if h_pixels else 0.0
 
@@ -387,46 +389,58 @@ class FallDetector:
             self._height_hist[tid] = hh
         hh.append(bbox_h_norm)
 
-        current_max = float(max(hh))
-        if current_max > 0.18:  # sanity: must look like a standing person
+        # ── Posture classification checks (raw geometry) ──
+        is_sitting_geom = bool(self._is_sitting(kps, bbox))
+        is_crouching_geom = bool(self._is_crouching_or_bending(kps, bbox))
+
+        # Genuine upright standing posture:
+        # - spine angle >= 55.0 deg
+        # - shoulders clearly above hips (torso_dy >= 0.03 * h_pixels)
+        # - aspect ratio characteristic of standing / walking (ratio <= 0.68)
+        # - NOT sitting on chair/bench and NOT crouching
+        is_upright_now = bool(
+            has_pose and (angle >= 55.0) and (torso_dy >= 0.03 * h_pixels) and (ratio <= 0.68)
+            and not is_sitting_geom and not is_crouching_geom
+        )
+        is_vert_bbox_now = bool(
+            ratio <= 0.65 and bbox_h_norm >= 0.15
+            and not is_sitting_geom and not is_crouching_geom
+        )
+
+        # Track initial appearance posture
+        if tid not in self._initial_posture_lying:
+            # First time track is seen: check if already in a resting/sitting/lying posture
+            is_init_lying = bool(ratio >= 0.95 or (has_pose and angle <= 45.0) or is_sitting_geom)
+            self._initial_posture_lying[tid] = is_init_lying
+            self._was_upright[tid] = bool((is_upright_now or is_vert_bbox_now) and not is_init_lying)
+            self._has_fall_transition[tid] = False
+
+        # ── Standing height calibration ──
+        # ONLY calibrate stand_height if the person is actively observed standing upright!
+        # Sitting on furniture or resting/lying horizontally must NEVER calibrate stand_height.
+        if (is_upright_now or is_vert_bbox_now) and not is_sitting_geom and not is_crouching_geom:
+            self._was_upright[tid] = True
+            self._initial_posture_lying[tid] = False  # cleared if ever observed standing upright
             prev = self._stand_height.get(tid, 0.0)
-            if current_max > prev:
-                self._stand_height[tid] = current_max
+            if bbox_h_norm > prev:
+                self._stand_height[tid] = bbox_h_norm
 
         stand_h = self._stand_height.get(tid)
         was_down = bool(tid in self._ground_time or tid in self._since)
         thresh_factor = 0.88 if was_down else 0.84
-        # Stature collapse: height collapsed by >= 16% (or 12% if already down) with wide ratio
+
+        # Stature collapse: height collapsed by >= 16% (or 12% if already down) compared to KNOWN standing height
+        # ONLY valid if the person was actually calibrated standing (stand_h is not None and _was_upright is True)
         detect_lying_height = bool(
-            stand_h and (bbox_h_norm <= stand_h * thresh_factor) and (ratio >= 0.66 or angle < self.lying_angle_thresh)
+            stand_h is not None and self._was_upright.get(tid, False)
+            and (bbox_h_norm <= stand_h * thresh_factor)
+            and (ratio >= 0.66 or angle < self.lying_angle_thresh)
         )
 
-        # [Day 3] Anatomical Hard Clamp:
-        # A person lying on the ground CANNOT have an upright spine (angle >= 60.0°).
-        # When confident torso keypoints exist and the spine is vertical, the person is
-        # standing/walking/waiting. Lower-body occlusion (by desks, railings, or lift doors)
-        # must NEVER cause an upright person to be declared fallen.
-        # Genuine upright standing requires:
-        # - angle >= 60.0 deg
-        # - shoulders clearly above hips (torso_dy >= 0.04 * h_pixels, e.g. >= 43px in 1080p)
-        # - aspect ratio characteristic of standing (ratio <= 0.80)
-        # - stature has NOT collapsed (not detect_lying_height)
-        is_upright = bool(
-            has_pose and (angle >= 60.0) and (torso_dy >= 0.04 * h_pixels) and (ratio <= 0.80) and not detect_lying_height
-        )
-        is_vert_bbox = bool(ratio <= 0.65 and (y2 - y1) >= 0.18 * h_pixels and not detect_lying_height)
-
-        # Track initial appearance posture
-        if tid not in self._initial_posture_lying:
-            # First time track is seen: check if already in a resting/lying posture
-            is_init_lying = bool(ratio >= 1.25 or (has_pose and angle <= 35.0))
-            self._initial_posture_lying[tid] = is_init_lying
-            self._was_upright[tid] = bool(is_upright or is_vert_bbox)
-            self._has_fall_transition[tid] = False
-
-        if is_upright or is_vert_bbox:
-            self._was_upright[tid] = True
-            self._initial_posture_lying[tid] = False  # cleared if ever observed standing upright
+        is_sitting = bool(is_sitting_geom and not detect_lying_height)
+        is_crouching = bool(is_crouching_geom and not detect_lying_height)
+        is_upright = bool(is_upright_now and not detect_lying_height)
+        is_vert_bbox = bool(is_vert_bbox_now and not detect_lying_height)
 
         # ── Velocity history ──
         dq = self._update_hist(tid, now, cy)
@@ -520,7 +534,7 @@ class FallDetector:
         )
 
         # ── Posture classification checks ──
-        is_sitting = bool(self._is_sitting(kps, bbox) and not detect_lying_height)
+        is_sitting = bool(is_sitting_geom and not detect_lying_height)
         is_crouching = bool(self._is_crouching_or_bending(kps, bbox) and not detect_lying_height)
 
         if is_upright or is_sitting:
@@ -579,7 +593,13 @@ class FallDetector:
         )
 
         # ── Upright / Sitting / Crouch Posture Guard ──
-        if (is_upright or is_sitting or (is_crouching and not detect_spike)) and not detect_lying_height:
+        # Genuine upright torso: vertical spine, substantial vertical torso, no stature collapse
+        has_upright_torso = bool(
+            has_pose and (angle >= 60.0) and (torso_dy >= 0.03 * h_pixels)
+            and not detect_lying_height
+        )
+
+        if is_sitting or has_upright_torso or is_upright or ((is_crouching and not detect_spike) and not detect_lying_height):
             is_down = False
             detect_ground = False
             self._ground_candidate.pop(tid, None)
@@ -617,7 +637,8 @@ class FallDetector:
             self._since.pop(tid, None)
             td = 0.0
             self._spike_time.pop(tid, None)
-            self._ground_time.pop(tid, None)
+            if is_upright or is_sitting or has_upright_torso:
+                self._ground_time.pop(tid, None)
 
         # ── Geometry path can set ground_time independently ──
         ground_t = self._ground_time.get(tid)
@@ -676,27 +697,28 @@ class FallDetector:
             )
 
         # Sitting, upright, or crouching person is never fallen
-        if (is_sitting or is_upright or (is_crouching and not detect_spike)) and not detect_lying_height:
+        if is_sitting or has_upright_torso or is_upright or ((is_crouching and not detect_spike) and not detect_lying_height):
             is_fallen = False
             danger_lying = False
+            is_critical = False
 
         # ── Pre-existing resting/lying on furniture suppression ──
         # A true Fall requires evidence of a fall event:
         # Either the person was observed standing/upright prior to being down,
         # or they experienced a downward velocity spike / impact,
-        # or a dynamic stature collapse transition.
+        # or a dynamic stature collapse transition from a calibrated standing height.
         # A static/resting person on a bench or chair who was never seen standing
         # and had no velocity spike did NOT suffer a fall event.
         has_fall_evidence = bool(
             self._was_upright.get(tid, False)
-            or self._has_fall_transition.get(tid, False)
             or detect_spike
             or (spike_t is not None)
-            or detect_lying_height
+            or (self._was_upright.get(tid, False) and detect_lying_height)
         )
         if not has_fall_evidence:
             is_fallen = False
             danger_lying = False
+            is_critical = False
 
         # ── Trip / quick-recovery suppression ──
         recovered_quickly = False
@@ -714,9 +736,11 @@ class FallDetector:
         time_down_val = (now - ground_t) if ground_t else td
 
         # ── Critical escalation ──
-        is_critical = (
-            (ground_t is not None and time_lying is not None and time_lying >= self.critical_s)
-            or danger_lying
+        is_critical = bool(
+            has_fall_evidence and not is_sitting and not is_upright and not has_upright_torso and (
+                (ground_t is not None and time_lying is not None and time_lying >= self.critical_s)
+                or danger_lying
+            )
         )
 
         # ── Event Confidence (Fall Certainty) ──
