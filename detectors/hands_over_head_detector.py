@@ -149,27 +149,30 @@ class HandsOverHeadDetector:
         if _vis(l_elbow, self.min_kp_conf) and _vis(r_elbow, self.min_kp_conf):
             elbow_sep = abs(float(l_elbow[0]) - float(r_elbow[0]))
 
+        min_rise = max(4.0, 0.08 * torso_h if torso_h > 0 else 0.02 * h_pixels)
+        head_margin = max(4.0, 0.06 * torso_h if torso_h > 0 else 0.02 * h_pixels)
+
         # ── Option 1: Triangle / Roof gesture above head ──
         # Both wrists above head, close together / meeting (apex of triangle),
         # with elbows spread outward (base of triangle).
         is_triangle = (
-            l_wrist_y <= shoulder_y - 10.0 and
-            r_wrist_y <= shoulder_y - 10.0 and
-            l_wrist_y <= ref_y + 10.0 and
-            r_wrist_y <= ref_y + 10.0 and
-            wrist_sep <= max(35.0, 0.40 * shoulder_w) and
-            elbow_sep >= max(wrist_sep * 1.35, 0.48 * shoulder_w)
+            l_wrist_y <= shoulder_y - min_rise and
+            r_wrist_y <= shoulder_y - min_rise and
+            l_wrist_y <= ref_y + head_margin and
+            r_wrist_y <= ref_y + head_margin and
+            wrist_sep <= max(25.0, 0.40 * shoulder_w) and
+            elbow_sep >= max(wrist_sep * 1.35, 0.45 * shoulder_w)
         )
 
         # ── Option 2: Hands Raised V-Shape ──
         # Both wrists above shoulders and at/above head, spread apart.
-        min_sep = max(18.0, 0.50 * shoulder_w)
+        min_sep = max(15.0, 0.48 * shoulder_w)
         is_hands_up_v = (
             wrist_sep >= min_sep and
-            l_wrist_y <= shoulder_y - 12.0 and
-            r_wrist_y <= shoulder_y - 12.0 and
-            l_wrist_y <= ref_y + 5.0 and
-            r_wrist_y <= ref_y + 5.0
+            l_wrist_y <= shoulder_y - min_rise and
+            r_wrist_y <= shoulder_y - min_rise and
+            l_wrist_y <= ref_y + head_margin and
+            r_wrist_y <= ref_y + head_margin
         )
 
         gesture_option = None

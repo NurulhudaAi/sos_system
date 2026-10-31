@@ -562,7 +562,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     # Post-Alert Recovery & Stood-Up Tracking (Action Plan)
                     if tid in active_fall_alerts:
                         af = active_fall_alerts[tid]
-                        is_standing_now = (not fr.get("is_down") and not fr.get("is_fallen") and float(fr.get("spine_angle", 0) or 0) >= 65.0)
+                        is_standing_now = (not fr.get("is_down") and not fr.get("is_fallen") and (float(fr.get("spine_angle", 0) or 0) >= 50.0 or fr.get("is_sitting") or fr.get("is_crouching")))
                         if is_standing_now:
                             fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
                             if fall_stand_count[tid] >= 3 and not af.get("recovered"):

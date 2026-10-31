@@ -47,7 +47,7 @@ fall:
   fall_pose_iou_thresh: 0.3
   fall_pose_containment_fallback: true
   fall_hysteresis_factor: 2.0
-  spine_angle_thresh: 55.0
+  spine_angle_thresh: 42.0
   sustain_seconds: 1.0
   temporal_threshold: 0.4
   temporal_window: 10
