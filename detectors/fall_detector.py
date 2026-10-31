@@ -789,6 +789,7 @@ class FallDetector:
         return {
             "is_fallen":             bool(is_fallen),
             "is_down":               bool(is_down),
+            "has_fall_evidence":     bool(has_fall_evidence),
             "is_sitting":            bool(is_sitting),
             "is_crouching":          bool(is_crouching),
             "time_down":             round(time_down_val, 1),
