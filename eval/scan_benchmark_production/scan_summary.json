@@ -1,0 +1,538 @@
+{
+  "C1-FL1-Lift.avi": [
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 137.32,
+      "frame_idx": 1094,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=67deg down=10.0s",
+      "confidence": 0.83,
+      "person_confidence": 0.9,
+      "track_id": 0,
+      "bbox": [
+        1537,
+        612,
+        1777,
+        952
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid0_137s.jpg",
+      "details": "angle=67.0 ratio=0.71 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 143.09,
+      "frame_idx": 1140,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=11] Hands Overhead (V) held=7.5s",
+      "confidence": 0.99,
+      "person_confidence": 0.92,
+      "track_id": 11,
+      "bbox": [
+        624,
+        247,
+        787,
+        603
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid11_143s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=False, time_held=7.5s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 182.25,
+      "frame_idx": 1452,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=3] Hands Overhead (V) Multi-Modal held=7.0s",
+      "confidence": 0.99,
+      "person_confidence": 0.91,
+      "track_id": 3,
+      "bbox": [
+        831,
+        214,
+        1034,
+        582
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid3_182s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=True, time_held=7.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 182.75,
+      "frame_idx": 1456,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=11] Hands Overhead (V) Multi-Modal held=7.0s",
+      "confidence": 0.99,
+      "person_confidence": 0.92,
+      "track_id": 11,
+      "bbox": [
+        541,
+        245,
+        818,
+        616
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid11_182s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=True, time_held=7.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 257.06,
+      "frame_idx": 2048,
+      "event_type": "Fall",
+      "label": "FALL [tid=3] angle=57deg down=10.0s",
+      "confidence": 0.84,
+      "person_confidence": 0.93,
+      "track_id": 3,
+      "bbox": [
+        325,
+        581,
+        602,
+        896
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid3_257s.jpg",
+      "details": "angle=57.0 ratio=0.88 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 266.35,
+      "frame_idx": 2122,
+      "event_type": "Fall",
+      "label": "FALL [tid=11] angle=68deg down=10.0s",
+      "confidence": 0.82,
+      "person_confidence": 0.76,
+      "track_id": 11,
+      "bbox": [
+        312,
+        493,
+        481,
+        662
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid11_266s.jpg",
+      "details": "angle=68.2 ratio=0.99 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 293.46,
+      "frame_idx": 2338,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=72deg down=10.0s",
+      "confidence": 0.86,
+      "person_confidence": 0.23,
+      "track_id": 0,
+      "bbox": [
+        1640,
+        604,
+        1782,
+        815
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid0_293s.jpg",
+      "details": "angle=71.8 ratio=0.67 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 320.07,
+      "frame_idx": 2550,
+      "event_type": "Fall",
+      "label": "FALL [tid=2] angle=2deg down=10.0s",
+      "confidence": 0.95,
+      "person_confidence": 0.9,
+      "track_id": 2,
+      "bbox": [
+        931,
+        600,
+        1272,
+        741
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid2_320s.jpg",
+      "details": "angle=2.0 ratio=2.41 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 354.96,
+      "frame_idx": 2828,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=45deg down=11.8s",
+      "confidence": 0.86,
+      "person_confidence": 0.71,
+      "track_id": 0,
+      "bbox": [
+        1758,
+        892,
+        1919,
+        1078
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid0_354s.jpg",
+      "details": "angle=45.1 ratio=0.87 time_down=11.8s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 378.06,
+      "frame_idx": 3012,
+      "event_type": "Fall",
+      "label": "FALL [tid=8] angle=32deg down=10.0s",
+      "confidence": 0.88,
+      "person_confidence": 0.85,
+      "track_id": 8,
+      "bbox": [
+        862,
+        707,
+        1020,
+        899
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid8_378s.jpg",
+      "details": "angle=32.2 ratio=0.82 time_down=10.0s"
+    }
+  ],
+  "D1-1st-Floor.mp4": [
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 47.21,
+      "frame_idx": 708,
+      "event_type": "Fall",
+      "label": "FALL [tid=1] angle=11deg down=10.0s",
+      "confidence": 0.94,
+      "person_confidence": 0.81,
+      "track_id": 1,
+      "bbox": [
+        402,
+        607,
+        836,
+        841
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid1_47s.jpg",
+      "details": "angle=11.1 ratio=1.86 time_down=10.0s"
+    },
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 47.87,
+      "frame_idx": 718,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=18deg down=10.0s",
+      "confidence": 0.95,
+      "person_confidence": 0.92,
+      "track_id": 0,
+      "bbox": [
+        904,
+        585,
+        1320,
+        772
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid0_47s.jpg",
+      "details": "angle=18.5 ratio=2.22 time_down=10.0s"
+    },
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 54.81,
+      "frame_idx": 822,
+      "event_type": "Fall",
+      "label": "FALL [tid=12] angle=27deg down=16.8s",
+      "confidence": 0.93,
+      "person_confidence": 0.7,
+      "track_id": 12,
+      "bbox": [
+        234,
+        525,
+        621,
+        764
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid12_54s.jpg",
+      "details": "angle=27.1 ratio=1.62 time_down=16.8s"
+    },
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 71.48,
+      "frame_idx": 1072,
+      "event_type": "Fall",
+      "label": "FALL [tid=2] angle=57deg down=10.0s",
+      "confidence": 0.84,
+      "person_confidence": 0.87,
+      "track_id": 2,
+      "bbox": [
+        116,
+        743,
+        413,
+        1076
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid2_71s.jpg",
+      "details": "angle=57.2 ratio=0.89 time_down=10.0s"
+    }
+  ],
+  "D1-Carpark.mp4": [
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 43.83,
+      "frame_idx": 348,
+      "event_type": "Fall",
+      "label": "FALL [tid=3] angle=52deg down=13.8s",
+      "confidence": 0.85,
+      "person_confidence": 0.61,
+      "track_id": 3,
+      "bbox": [
+        77,
+        812,
+        233,
+        1019
+      ],
+      "snapshot": "snapshots/D1-Carpark/fall_tid3_43s.jpg",
+      "details": "angle=51.5 ratio=0.75 time_down=13.8s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 46.35,
+      "frame_idx": 368,
+      "event_type": "Fall",
+      "label": "FALL [tid=5] angle=36deg down=11.1s",
+      "confidence": 0.87,
+      "person_confidence": 0.33,
+      "track_id": 5,
+      "bbox": [
+        124,
+        673,
+        216,
+        790
+      ],
+      "snapshot": "snapshots/D1-Carpark/fall_tid5_46s.jpg",
+      "details": "angle=36.3 ratio=0.79 time_down=11.1s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 277.1,
+      "frame_idx": 2200,
+      "event_type": "Fall",
+      "label": "FALL [tid=31] angle=57deg down=10.0s",
+      "confidence": 0.84,
+      "person_confidence": 0.49,
+      "track_id": 31,
+      "bbox": [
+        283,
+        656,
+        376,
+        783
+      ],
+      "snapshot": "snapshots/D1-Carpark/fall_tid31_277s.jpg",
+      "details": "angle=56.6 ratio=0.73 time_down=10.0s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 283.65,
+      "frame_idx": 2252,
+      "event_type": "Fall",
+      "label": "FALL [tid=44] angle=62deg down=10.0s",
+      "confidence": 0.83,
+      "person_confidence": 0.88,
+      "track_id": 44,
+      "bbox": [
+        213,
+        751,
+        367,
+        975
+      ],
+      "snapshot": "snapshots/D1-Carpark/fall_tid44_283s.jpg",
+      "details": "angle=62.2 ratio=0.69 time_down=10.0s"
+    },
+    {
+      "video": "D1-Carpark.mp4",
+      "timestamp_sec": 574.35,
+      "frame_idx": 4560,
+      "event_type": "Fall",
+      "label": "FALL [tid=116] angle=61deg down=10.0s",
+      "confidence": 0.83,
+      "person_confidence": 0.9,
+      "track_id": 116,
+      "bbox": [
+        512,
+        610,
+        665,
+        834
+      ],
+      "snapshot": "snapshots/D1-Carpark/fall_tid116_574s.jpg",
+      "details": "angle=61.2 ratio=0.68 time_down=10.0s"
+    }
+  ],
+  "D1-Stair-FL2 1.mp4": [
+    {
+      "video": "D1-Stair-FL2 1.mp4",
+      "timestamp_sec": 145.23,
+      "frame_idx": 1156,
+      "event_type": "Fall",
+      "label": "FALL [tid=1] angle=29deg down=10.0s",
+      "confidence": 0.89,
+      "person_confidence": 0.32,
+      "track_id": 1,
+      "bbox": [
+        1509,
+        408,
+        1614,
+        500
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 1/fall_tid1_145s.jpg",
+      "details": "angle=29.2 ratio=1.14 time_down=10.0s"
+    },
+    {
+      "video": "D1-Stair-FL2 1.mp4",
+      "timestamp_sec": 188.45,
+      "frame_idx": 1500,
+      "event_type": "Fall",
+      "label": "FALL [tid=28] angle=64deg down=11.3s",
+      "confidence": 0.83,
+      "person_confidence": 0.68,
+      "track_id": 28,
+      "bbox": [
+        1508,
+        872,
+        1706,
+        1079
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 1/fall_tid28_188s.jpg",
+      "details": "angle=63.8 ratio=0.96 time_down=11.3s"
+    }
+  ],
+  "D1-Stair-FL2 2.mp4": [
+    {
+      "video": "D1-Stair-FL2 2.mp4",
+      "timestamp_sec": 37.18,
+      "frame_idx": 296,
+      "event_type": "Fall",
+      "label": "FALL [tid=7] angle=27deg down=10.0s",
+      "confidence": 0.89,
+      "person_confidence": 0.25,
+      "track_id": 7,
+      "bbox": [
+        1586,
+        910,
+        1739,
+        1049
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 2/fall_tid7_37s.jpg",
+      "details": "angle=26.7 ratio=1.09 time_down=10.0s"
+    }
+  ],
+  "E1-Hall 1.mp4": [
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 27.88,
+      "frame_idx": 222,
+      "event_type": "Fall",
+      "label": "FALL [tid=4] angle=22deg down=10.0s",
+      "confidence": 0.91,
+      "person_confidence": 0.74,
+      "track_id": 4,
+      "bbox": [
+        802,
+        394,
+        1006,
+        562
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid4_27s.jpg",
+      "details": "angle=22.2 ratio=1.21 time_down=10.0s"
+    },
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 31.65,
+      "frame_idx": 252,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=44deg down=10.0s",
+      "confidence": 0.86,
+      "person_confidence": 0.78,
+      "track_id": 0,
+      "bbox": [
+        1116,
+        625,
+        1266,
+        797
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid0_31s.jpg",
+      "details": "angle=44.2 ratio=0.87 time_down=10.0s"
+    },
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 96.95,
+      "frame_idx": 772,
+      "event_type": "Fall",
+      "label": "FALL [tid=4] angle=24deg down=10.0s",
+      "confidence": 0.91,
+      "person_confidence": 0.4,
+      "track_id": 4,
+      "bbox": [
+        820,
+        411,
+        1009,
+        561
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid4_96s.jpg",
+      "details": "angle=23.6 ratio=1.26 time_down=10.0s"
+    },
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 112.52,
+      "frame_idx": 896,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=30deg down=10.0s",
+      "confidence": 0.88,
+      "person_confidence": 0.8,
+      "track_id": 0,
+      "bbox": [
+        976,
+        546,
+        1201,
+        767
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid0_112s.jpg",
+      "details": "angle=30.2 ratio=1.02 time_down=10.0s"
+    },
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 130.36,
+      "frame_idx": 1038,
+      "event_type": "Fall",
+      "label": "FALL [tid=1] angle=66deg down=10.0s",
+      "confidence": 0.83,
+      "person_confidence": 0.35,
+      "track_id": 1,
+      "bbox": [
+        675,
+        558,
+        815,
+        753
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid1_130s.jpg",
+      "details": "angle=66.1 ratio=0.72 time_down=10.0s"
+    },
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 172.55,
+      "frame_idx": 1374,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=77deg down=12.8s",
+      "confidence": 0.81,
+      "person_confidence": 0.87,
+      "track_id": 0,
+      "bbox": [
+        960,
+        556,
+        1108,
+        765
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid0_172s.jpg",
+      "details": "angle=77.2 ratio=0.71 time_down=12.8s"
+    }
+  ],
+  "E1-Hall 2.mp4": [
+    {
+      "video": "E1-Hall 2.mp4",
+      "timestamp_sec": 38.92,
+      "frame_idx": 310,
+      "event_type": "Fall",
+      "label": "FALL [tid=3] angle=52deg down=10.0s",
+      "confidence": 0.85,
+      "person_confidence": 0.6,
+      "track_id": 3,
+      "bbox": [
+        1173,
+        882,
+        1324,
+        1064
+      ],
+      "snapshot": "snapshots/E1-Hall 2/fall_tid3_38s.jpg",
+      "details": "angle=51.8 ratio=0.83 time_down=10.0s"
+    }
+  ]
+}
