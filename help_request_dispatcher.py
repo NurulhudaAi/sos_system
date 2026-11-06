@@ -19,9 +19,9 @@ class HelpRequestDispatcher:
         self.enabled = bool(self.webhook_url)
 
         if self.enabled:
-            logger.info(f"✅ Help dispatcher enabled: {self._mask_url(self.webhook_url)}")
+            logger.info(f"[OK] Help dispatcher enabled: {self._mask_url(self.webhook_url)}")
         else:
-            logger.info("⚠️  Help dispatcher disabled (no webhook URL)")
+            logger.info("[WARN] Help dispatcher disabled (no webhook URL)")
 
     def should_send_help_request(self, event_type: str, severity: int) -> bool:
         """Determine if event should trigger help request.
@@ -95,7 +95,7 @@ class HelpRequestDispatcher:
             return success
 
         except Exception as e:
-            logger.error(f"❌ Help request failed: {e}")
+            logger.error(f"[ERROR] Help request failed: {e}")
             return False
 
     def _send_with_retries(self, payload: Dict, max_retries: int = 3) -> bool:
@@ -113,13 +113,13 @@ class HelpRequestDispatcher:
 
                 if response.status_code in [200, 201, 202, 204]:
                     logger.info(
-                        f"✅ Help request sent (attempt {attempt + 1}): "
+                        f"[OK] Help request sent (attempt {attempt + 1}): "
                         f"{response.status_code} in {response.elapsed.total_seconds():.2f}s"
                     )
                     return True
                 else:
                     logger.warning(
-                        f"⚠️  Help request returned {response.status_code}: {response.text[:100]}"
+                        f"[WARN] Help request returned {response.status_code}: {response.text[:100]}"
                     )
                     if attempt < max_retries - 1:
                         time.sleep(1)
@@ -127,14 +127,14 @@ class HelpRequestDispatcher:
                     return False
 
             except requests.Timeout:
-                logger.warning(f"⚠️  Webhook timeout (attempt {attempt + 1}/{max_retries})")
+                logger.warning(f"[WARN] Webhook timeout (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 return False
 
             except Exception as e:
-                logger.error(f"❌ Webhook error (attempt {attempt + 1}): {e}")
+                logger.error(f"[ERROR] Webhook error (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue

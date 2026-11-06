@@ -98,7 +98,7 @@ class ZoneManager:
                 if cam_cfg:
                     loaded = cam_cfg.get("zones", [])
             except Exception as e:
-                print(f"⚠️  [ZoneManager] Could not load zones from {self.path} (cam_id={self.cam_id!r}): {e}")
+                print(f"[WARN] [ZoneManager] Could not load zones from {self.path} (cam_id={self.cam_id!r}): {e}")
 
         self.reload_zones(loaded or [])
 
@@ -648,7 +648,7 @@ class AlertDispatcher:
                 )
             except Exception as e:
                 self._log.warning(f"MongoDB event insert failed: {e}")
-                print(f"⚠️  MongoDB event insert failed: {e}")
+                print(f"[WARN] MongoDB event insert failed: {e}")
 
         # ── One-per-file mark ─────────────────────────────────────────────
         if self._enforce_one_per_file and source:
@@ -676,6 +676,6 @@ class AlertDispatcher:
                     )
             except Exception as e:
                 self._log.warning(f"Help request dispatch failed: {e}")
-                print(f"⚠️  Help request error: {e}")
+                print(f"[WARN] Help request error: {e}")
 
         return snapshot_val

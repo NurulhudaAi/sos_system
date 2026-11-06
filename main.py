@@ -189,7 +189,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
         try:
             url=vlc_mgr.start()
         except RuntimeError as e:
-            print(f"\n❌ [VLC] ERROR: {e}")
+            print(f"\n[ERROR] [VLC] {e}")
             import traceback
             traceback.print_exc()
             return
@@ -201,7 +201,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 break
             time.sleep(1)
         else:
-            print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
+            print(f"[WARN] [VLC] Stream not responding after 10s — continuing anyway")
 
     # [QA-P0-1] Live sources (RTSP / HTTP / VLC) use a background reader
     # that keeps only the newest frame → no buffer build-up / lag / smear.
@@ -262,7 +262,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
     webhook_url = os.getenv("HELP_WEBHOOK_URL")
     if not webhook_url:
-        print("⚠️  HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
+        print("[WARN] HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
 
     # [FIX] db= was missing → help_requests collection stayed empty forever
     help_disp = HelpRequestDispatcher(webhook_url=webhook_url or "", db=db_module)
@@ -330,7 +330,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             url = vlc_mgr.restart()
                             reader.reopen(url)
                         except Exception as restart_err:
-                            print(f"❌ [VLC] Restart failed: {restart_err}")
+                            print(f"[ERROR] [VLC] Restart failed: {restart_err}")
                     if retry_count > max_retries:
                         print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
                         break
@@ -488,7 +488,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                     notes=f"Subject recovered and safely departed the scene at t={now_t:.1f}s",
                                     extra_meta={"post_event_status": "RECOVERED_AND_DEPARTED"}
                                 )
-                                print(f"  🚶 [ACTION PLAN] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
+                                print(f"  [ACTION] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
                             except Exception:
                                 pass
                         active_fall_alerts.pop(tid, None)
@@ -571,7 +571,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
                             if fall_stand_count[tid] >= 3 and not af.get("recovered"):
                                 af["recovered"] = True
-                                print(f"  🌟 [ACTION PLAN] tid={tid} stood up & recovered at {now_t:.1f}s!")
+                                print(f"  [RECOVERY] tid={tid} stood up & recovered at {now_t:.1f}s!")
                                 rec_b64, rec_file = save_annotated_snapshot(
                                     clean_frame,
                                     event_type="recovery",
@@ -599,7 +599,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                             recovery_snapshot_url=rec_b64,
                                             recovery_image_path=rec_file,
                                         )
-                                        print(f"  📸 [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_file or 'base64'}")
+                                        print(f"  [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_file or 'base64'}")
                                     except Exception as e:
                                         print(f"[DB] resolve_incident error: {e}")
                         else:
@@ -1090,7 +1090,7 @@ if __name__=="__main__":
         db_cams = db_module.get_active_cameras(cam_id=target_cam)
         for i, c in enumerate(db_cams):
             if not c.get("path"):
-                print(f"⚠️  Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
+                print(f"[WARN] Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
                 continue
             sources.append({
                 "id": c.get("code") or f"cam_{i+1}",
@@ -1121,11 +1121,11 @@ if __name__=="__main__":
     elif args.dir:
         p = Path(args.dir)
         if not p.exists():
-            print(f"❌ ไม่พบโฟลเดอร์: {args.dir}")
+            print(f"[ERROR] Directory not found: {args.dir}")
             sys.exit(1)
         vids = sorted([f for f in p.iterdir() if f.suffix.lower() in [".mp4", ".avi", ".mkv", ".m4v", ".mov"]])
         if not vids:
-            print(f"⚠️ ไม่พบไฟล์วิดีโอในโฟลเดอร์: {args.dir}")
+            print(f"[WARN] No video files found in directory: {args.dir}")
             sys.exit(1)
         for i, v in enumerate(vids):
             sources.append({
@@ -1142,10 +1142,10 @@ if __name__=="__main__":
             all_sources = yaml.safe_load((ROOT / "config/sources.yaml").read_text()).get("sources", [])
             sources = [s for s in all_sources if s.get("enabled", True)]
         except Exception as e:
-            print(f"⚠️ อ่าน config/sources.yaml ผิดพลาด: {e}")
+            print(f"[WARN] Failed to read config/sources.yaml: {e}")
     else:
-        print("❌ ไม่พบ config/sources.yaml และไม่มีการระบุ --source, --dir หรือ --from-db")
-        print("\nตัวอย่างการใช้งาน:")
+        print("[ERROR] config/sources.yaml not found and no --source, --dir, or --from-db provided")
+        print("\nUsage examples:")
         print("  python3 main.py --from-db")
         print("  python3 main.py --source 'rtsp://...'")
         print("  python3 main.py --source '/path/to/video.mp4'")
@@ -1153,7 +1153,7 @@ if __name__=="__main__":
         sys.exit(1)
 
     if not sources:
-        print("⚠️ ไม่มี Source สำหรับประมวลผล — ออกจากการทำงาน")
+        print("[WARN] No active sources to process — exiting")
         sys.exit(0)
 
     print(f"\n{'='*60}")
@@ -1161,7 +1161,7 @@ if __name__=="__main__":
     print(f"{'='*60}")
     print(f"Enabled: {len(sources)} sources")
     for s in sources:
-        print(f"  ✓ {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
+        print(f"  [OK] {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
     print(f"{'='*60}\n")
     procs=[]
     for s in sources:

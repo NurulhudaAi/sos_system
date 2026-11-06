@@ -828,7 +828,7 @@ if __name__ == "__main__":
 
     if args.encrypt:
         enc, iv = encrypt_rtsp_url(args.encrypt)
-        print("\n✅ [AES-256-GCM Encrypted Successfully]")
+        print("\n[OK] [AES-256-GCM Encrypted Successfully]")
         print(f"rtsp_url_encrypted : \"{enc}\"")
         print(f"rtsp_iv            : \"{iv}\"")
         print("\nExample MongoDB update/insert snippet:")
@@ -846,7 +846,7 @@ if __name__ == "__main__":
 
     elif args.add_cam:
         if not args.code or not args.url:
-            print("❌ Error: --code and --url are required when using --add-cam")
+            print("[ERROR] --code and --url are required when using --add-cam")
             sys.exit(1)
         ok = register_or_update_camera(
             code=args.code,
@@ -857,8 +857,8 @@ if __name__ == "__main__":
         )
         if ok:
             mode_str = "plaintext" if args.plain else "AES-256-GCM encrypted"
-            print(f"✅ Camera '{args.code}' saved to MongoDB successfully ({mode_str}).")
+            print(f"[OK] Camera '{args.code}' saved to MongoDB successfully ({mode_str}).")
         else:
-            print(f"❌ Failed to save camera '{args.code}'. Check log for details.")
+            print(f"[ERROR] Failed to save camera '{args.code}'. Check log for details.")
     else:
         parser.print_help()

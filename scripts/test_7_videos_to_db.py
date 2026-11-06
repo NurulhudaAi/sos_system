@@ -21,18 +21,18 @@ import database
 
 def main():
     print("=" * 78)
-    print(" 🚀 เริ่มต้นทดสอบส่งข้อมูล Incident จาก 7 Benchmark Videos เข้า MongoDB Atlas")
+    print(" [BENCHMARK] Test 7 Benchmark Videos -> MongoDB Atlas")
     print("=" * 78)
 
     # 1. เช็กการเชื่อมต่อ DB
     db = database._get_db()
     col_name = database.INCIDENTS_COLLECTION
-    print(f"📦 ฐานข้อมูล: {database.MONGODB_DB_NAME} | Collection: {col_name}")
-    print(f"📡 สถานะการเชื่อมต่อ: {'สำเร็จ (Online)' if database.health_check() else 'ล้มเหลว'}")
+    print(f"[DB] Database: {database.MONGODB_DB_NAME} | Collection: {col_name}")
+    print(f"[STATUS] Connection: {'Online' if database.health_check() else 'Offline'}")
 
     summary_file = ROOT / "eval" / "scan_after_tuning" / "scan_summary.json"
     if not summary_file.exists():
-        print(f"❌ ไม่พบไฟล์สรุป {summary_file}")
+        print(f"[ERROR] Summary file not found: {summary_file}")
         return
 
     with open(summary_file, "r", encoding="utf-8") as f:
@@ -43,10 +43,10 @@ def main():
 
     for video_name, events in benchmarks.items():
         cam_code = video_name.rsplit(".", 1)[0]
-        print(f"\n📹 ตรวจสอบวิดีโอ: {video_name} (กล้อง {cam_code}) -> พบ {len(events)} เหตุการณ์")
+        print(f"\n[VIDEO] {video_name} (Camera {cam_code}) -> {len(events)} events found")
 
         if not events:
-            print("   🛡️ [Clean Pass] ไม่มีเหตุการณ์ผิดปกติ (Normal Motion - 0 False Alarm)")
+            print("   [Clean Pass] Normal Motion (0 False Alarm)")
             continue
 
         for ev in events:
@@ -120,17 +120,17 @@ def main():
                 "severity": sev,
                 "conf": conf,
             })
-            print(f"   💾 บันทึกแล้ว: [{sev:8s}] {det_type:7s} | {lbl} | UUID: {ev_uuid[:8]}...")
+            print(f"   [SAVED] [{sev:8s}] {det_type:7s} | {lbl} | UUID: {ev_uuid[:8]}...")
 
     # 3. สรุปผลการ Query จากฐานข้อมูลจริง
     print("\n" + "=" * 78)
-    print(" 📊 สรุปผลการบันทึกข้อมูลเข้าสู่ฐานข้อมูล (MongoDB Verification)")
+    print(" [SUMMARY] MongoDB Incident Verification Report")
     print("=" * 78)
     total_in_col = db[col_name].count_documents({})
     batch_count = db[col_name].count_documents({"metadata.batch_test": batch_tag})
 
-    print(f"• จำนวน Incident ทั้งหมดใน Collection `{col_name}`: {total_in_col} รายการ")
-    print(f"• จำนวน Incident ที่เพิ่งบันทึกจาก Batch นี้: {batch_count} รายการ\n")
+    print(f"- Total incidents in collection `{col_name}`: {total_in_col}")
+    print(f"- Incidents inserted in current batch: {batch_count}\n")
 
     print(f"{'No.':<4} | {'Camera / Zone':<16} | {'Type':<8} | {'Time (s)':<9} | {'Severity':<9} | {'Status':<8} | {'UUID':<12}")
     print("-" * 78)
@@ -142,7 +142,7 @@ def main():
         print(f"{i:<4} | {r['zone']:<16} | {r['type']:<8} | {r['time']:<8.1f}s | {r['severity']:<9} | {state:<8} | {r['uuid'][:10]}...")
 
     print("=" * 78)
-    print("✅ ทดสอบส่งข้อมูลครบทั้ง 7 วิดีโอเข้าสู่ Database เรียบร้อยแล้ว")
+    print("[OK] Benchmark database testing completed successfully")
 
 if __name__ == "__main__":
     main()

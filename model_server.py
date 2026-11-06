@@ -152,11 +152,11 @@ try:
     print(f"[model-server] Object model loaded ({len(OBJ_NAMES)} classes)")
 except Exception as e:
     OBJ_NAMES = {}
-    print(f"⚠️  [model-server] Object model NOT loaded ({e}) — "
+    print(f"[WARN] [model-server] Object model NOT loaded ({e}) — "
           f"Object Guardian will see zero objects until '{OBJECT_MODEL}' "
           f"is available. Fall/hand_sos detection is unaffected.")
 
-# [NEW] load optional custom laying/standing pose model once.
+# Optional custom laying/standing pose model.
 # When present, this REPLACES the generic pose model as the primary
 # person detector (better recall on lying/prone poses), while still
 # providing 17-keypoint output for FallDetector's geometry math.
@@ -169,7 +169,7 @@ if FALL_POSE_MODEL:
               f"(classes={yolo_fall_pose.names})")
     except Exception as e:
         yolo_fall_pose = None
-        print(f"⚠️  [model-server] Custom fall-pose model NOT loaded ({e}) — "
+        print(f"[WARN] [model-server] Custom fall-pose model NOT loaded ({e}) — "
               f"falling back to generic pose model only. Set "
               f"general.fall_pose_model in thresholds.yaml once your "
               f"trained weights (e.g. FallGuard_YOLOv8Pose.pt) are in place.")

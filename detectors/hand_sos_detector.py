@@ -59,7 +59,7 @@ class HandSOSDetector:
             )
             self._detector = mp_vision.HandLandmarker.create_from_options(opts)
             self._enabled  = True
-            print("HandSOSDetector ready ✓")
+            print("[OK] HandSOSDetector ready")
         except Exception as e:
             print(f"[WARN] HandSOSDetector disabled: {e}")
 
@@ -76,7 +76,7 @@ class HandSOSDetector:
             ctx.verify_mode = ssl.CERT_NONE
             with urllib.request.urlopen(url, context=ctx) as r, open(str(path),"wb") as f:
                 f.write(r.read())
-            print("Model downloaded ✓")
+            print("[OK] Model downloaded")
         return str(path)
 
     def _palm_open(self, lm):

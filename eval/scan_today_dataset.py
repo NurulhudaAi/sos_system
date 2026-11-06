@@ -188,10 +188,10 @@ def _dispatch_to_db(ev_type: str, lbl: str, conf: float, tid: int, bbox: list, s
                 "details":           details,
             }
         )
-        print(f"    💾 [DB INSERTED] {lbl} uuid={ev_uuid[:8]}... (event_conf={conf:.2f}, person_conf={person_conf:.2f})")
+        print(f"    [DB INSERTED] {lbl} uuid={ev_uuid[:8]}... (event_conf={conf:.2f}, person_conf={person_conf:.2f})")
         return ev_uuid
     except Exception as e:
-        print(f"    ⚠️ [DB INSERT ERROR] {e}")
+        print(f"    [WARN] [DB INSERT ERROR] {e}")
         return ""
 
 
@@ -199,7 +199,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
     video_path = Path(video_path)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        print(f"❌ Cannot open {video_path.name}")
+        print(f"[ERROR] Cannot open {video_path.name}")
         return []
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 8.0
@@ -209,7 +209,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
     h_orig = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     print(f"\n{'='*70}")
-    print(f"🎬 Scanning: {video_path.name}")
+    print(f"[SCAN] {video_path.name}")
     print(f"   Resolution: {w_orig}x{h_orig} | FPS: {fps:.1f} | Duration: {duration_s:.1f}s ({total_frames} frames)")
     print(f"{'='*70}")
 
@@ -304,7 +304,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                 "details": f"unattended={oa.get('seconds_unattended', 0):.1f}s",
             }
             events.append(ev_item)
-            print(f"  🔔 [{frame_ts:6.1f}s] {ev_item['label']} (tid={oa.get('track_id')})")
+            print(f"  [EVENT] [{frame_ts:6.1f}s] {ev_item['label']} (tid={oa.get('track_id')})")
 
         # Cleanup lost tracks
         alive = set(tracker.tracks.keys())
@@ -332,7 +332,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                             notes=f"Subject recovered and safely departed the scene at t={frame_ts:.1f}s",
                             extra_meta={"post_event_status": "RECOVERED_AND_DEPARTED"}
                         )
-                        print(f"  🚶 [ACTION PLAN] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
+                        print(f"  [ACTION] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
                     except Exception:
                         pass
                 active_fall_alerts.pop(tid, None)
@@ -379,7 +379,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                     fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
                     if fall_stand_count[tid] >= 3 and not af.get("recovered"):
                         af["recovered"] = True
-                        print(f"  🌟 [ACTION PLAN] tid={tid} stood up & recovered at {frame_ts:.1f}s!")
+                        print(f"  [RECOVERY] tid={tid} stood up & recovered at {frame_ts:.1f}s!")
                         rec_snap_name = f"recovery_tid{tid}_{int(frame_ts)}s.jpg"
                         rec_snap_path = snap_dir / rec_snap_name
                         rec_lbl = f"RECOVERED [tid={tid}] Stood Up {fr.get('spine_angle', 0):.0f}deg"
@@ -403,9 +403,9 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                                     recovery_snapshot_url=rec_b64_url,
                                     recovery_image_path=str(rec_snap_path),
                                 )
-                                print(f"    📸 [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_snap_name}")
+                                print(f"    [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_snap_name}")
                             except Exception as e:
-                                print(f"    ⚠️ [DB RECOVERY ERROR] {e}")
+                                print(f"    [WARN] [DB RECOVERY ERROR] {e}")
                 else:
                     fall_stand_count[tid] = 0
 
@@ -444,7 +444,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         events.append(ev_item)
                         _fall_last_ts[tid] = frame_ts
                         fall_ev[tid] = True
-                        print(f"  🚨 [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {event_conf:.2f}, Person Conf: {conf:.2f})")
+                        print(f"  [ALERT] [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {event_conf:.2f}, Person Conf: {conf:.2f})")
                         ev_uuid = ""
                         if send_db:
                             ev_uuid = _dispatch_to_db("Fall", lbl, event_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
@@ -558,7 +558,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         hand_states[tid] = 0
                         hand_consec3[tid] = 0
                         hand_recent_sos[tid].clear()
-                        print(f"  🖐️ [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
+                        print(f"  [GESTURE] [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
                         if send_db:
                             _dispatch_to_db("Gesture", lbl, ev_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
 
@@ -596,7 +596,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         _pose_last_ts[tid] = frame_ts
                         if is_hand_co_active:
                             _hand_last_ts[tid] = frame_ts
-                        print(f"  🙌 [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
+                        print(f"  [GESTURE] [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
                         if send_db:
                             _dispatch_to_db("Gesture", lbl, ev_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
 
@@ -609,7 +609,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
     cap.release()
     hand_d.release()
     total_elapsed = time.time() - t_start
-    print(f"✅ Completed {video_path.name} in {total_elapsed:.1f}s ({frame_idx/max(1e-3, total_elapsed):.1f} FPS) -> Total events: {len(events)}")
+    print(f"[OK] Completed {video_path.name} in {total_elapsed:.1f}s ({frame_idx/max(1e-3, total_elapsed):.1f} FPS) -> Total events: {len(events)}")
     return events
 
 
@@ -632,7 +632,7 @@ def main():
         target_videos = sorted([p for p in v_dir.iterdir() if p.suffix.lower() in [".mp4", ".avi", ".mov", ".mkv"]])
 
     if not target_videos:
-        print("❌ No videos found to scan.")
+        print("[ERROR] No videos found to scan.")
         sys.exit(1)
 
     print(f"Found {len(target_videos)} video(s) to scan. Send to DB: {args.send_db}")
@@ -662,7 +662,7 @@ def main():
 
         f.write("## Detailed Event Chronology\n\n")
         for vname, evs in all_events.items():
-            f.write(f"### 📹 {vname} ({len(evs)} events)\n\n")
+            f.write(f"### [VIDEO] {vname} ({len(evs)} events)\n\n")
             if not evs:
                 f.write("*No alerts triggered (clean pass)*\n\n")
                 continue
@@ -674,7 +674,7 @@ def main():
                 f.write(f"| {e['timestamp_sec']}s | `{e['event_type']}` | {e['label']} | {e['track_id']} | {e['confidence']} | {p_conf} | {snap_link} |\n")
             f.write("\n")
 
-    print(f"\n🎉 All videos scanned! Report saved to:\n  - {md_path}\n  - {json_path}")
+    print(f"\n[OK] All videos scanned. Report saved to:\n  - {md_path}\n  - {json_path}")
 
 
 if __name__ == "__main__":

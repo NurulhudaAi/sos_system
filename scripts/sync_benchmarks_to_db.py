@@ -21,7 +21,7 @@ from database import insert_incident, _get_db, INCIDENTS_COLLECTION
 def sync_events_to_db(summary_json_path: Path):
     summary_json_path = Path(summary_json_path)
     if not summary_json_path.exists():
-        print(f"❌ File not found: {summary_json_path}")
+        print(f"[ERROR] File not found: {summary_json_path}")
         return 0
 
     base_dir = summary_json_path.parent
@@ -44,15 +44,15 @@ def sync_events_to_db(summary_json_path: Path):
     db = _get_db()
     col = db[INCIDENTS_COLLECTION]
     existing_count = col.count_documents({})
-    print(f"📊 Current incidents in MongoDB ({INCIDENTS_COLLECTION}): {existing_count}")
-    print(f"🚀 Processing events from {summary_json_path}...\n")
+    print(f"[INFO] Current incidents in MongoDB ({INCIDENTS_COLLECTION}): {existing_count}")
+    print(f"[INFO] Processing events from {summary_json_path}...\n")
 
     inserted_count = 0
     now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     for video_name, events in data.items():
         cam_code = Path(video_name).stem
-        print(f"📹 Source Video: {video_name} ({len(events)} events)")
+        print(f"[VIDEO] Source: {video_name} ({len(events)} events)")
         if not events:
             print("   (clean pass - 0 events)")
             continue
@@ -110,16 +110,16 @@ def sync_events_to_db(summary_json_path: Path):
                     metadata       = metadata,
                 )
                 inserted_count += 1
-                print(f"   [{idx}/{len(events)}] 💾 Inserted: {detection_type} ({severity}) - {lbl} @ {ts_sec}s -> uuid={ev_uuid[:8]}...")
+                print(f"   [{idx}/{len(events)}] [INSERTED] {detection_type} ({severity}) - {lbl} @ {ts_sec}s -> uuid={ev_uuid[:8]}...")
             except Exception as e:
-                print(f"   [{idx}/{len(events)}] ❌ Failed to insert: {e}")
+                print(f"   [{idx}/{len(events)}] [ERROR] Failed to insert: {e}")
 
         print()
 
     new_count = col.count_documents({})
     print(f"{'='*60}")
-    print(f"🎉 Successfully inserted {inserted_count} incident(s) into MongoDB Atlas!")
-    print(f"📊 Total incidents in collection '{INCIDENTS_COLLECTION}': {new_count}")
+    print(f"[OK] Successfully inserted {inserted_count} incident(s) into MongoDB Atlas")
+    print(f"[INFO] Total incidents in collection '{INCIDENTS_COLLECTION}': {new_count}")
     print(f"{'='*60}")
     return inserted_count
 
