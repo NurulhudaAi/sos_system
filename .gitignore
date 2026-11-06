@@ -31,6 +31,12 @@ eval/**/*.png
 # Video files (too large for git)
 videos/*
 !videos/.gitkeep
+eval/videos
+eval/videos/
+eval/scan_db_test/
+eval/scan_e1_fix/
+eval/scan_regression_after_171c782_82b33bc/
+eval/scan_zero_config_kinematics/
 *.mp4
 *.avi
 *.mkv

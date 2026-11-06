@@ -37,8 +37,8 @@ def sync_events_to_db(summary_json_path: Path):
     sev_map = {
         "critical_sos": "Critical",
         "fall": "High",
-        "hand_sos": "High",
-        "pose_sos": "High",
+        "hand_sos": "Medium",
+        "pose_sos": "Medium",
     }
 
     db = _get_db()

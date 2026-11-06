@@ -409,11 +409,19 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
         return False
 
 
-def resolve_incident(event_uuid: str, resolved_by: str = "auto_recovery", notes: str = "", post_event_status: Optional[str] = None) -> bool:
-    """Transition: state → Resolved (Action Plan for Post-Alert Recovery / Departure)"""
+def resolve_incident(
+    event_uuid: str,
+    resolved_by: str = "auto_recovery",
+    notes: str = "",
+    post_event_status: Optional[str] = None,
+    recovery_snapshot_url: Optional[str] = None,
+    recovery_image_path: Optional[str] = None,
+    extra_meta: Optional[Dict] = None,
+) -> bool:
+    """Transition: state → Resolved (Action Plan for Post-Alert Recovery / Departure with Snapshot Proof)"""
     db = _get_db()
     try:
-        update_doc = {
+        update_doc: Dict[str, Any] = {
             "state": "Resolved",
             "resolvedBy": resolved_by,
             "resolvedAt": _utcnow(),
@@ -423,6 +431,18 @@ def resolve_incident(event_uuid: str, resolved_by: str = "auto_recovery", notes:
         if post_event_status:
             update_doc["post_event_status"] = post_event_status
             update_doc["metadata.post_event_status"] = post_event_status
+        if recovery_snapshot_url:
+            raw_rec_b64 = recovery_snapshot_url.split(",", 1)[1] if "," in str(recovery_snapshot_url) else str(recovery_snapshot_url)
+            update_doc["recoverySnapshotUrl"] = recovery_snapshot_url
+            update_doc["recovery_snapshot_base64"] = raw_rec_b64
+            update_doc["metadata.recoverySnapshotUrl"] = recovery_snapshot_url
+            update_doc["metadata.recovery_snapshot_base64"] = raw_rec_b64
+        if recovery_image_path:
+            update_doc["recoveryImagePath"] = str(recovery_image_path)
+            update_doc["metadata.recoveryImagePath"] = str(recovery_image_path)
+        if extra_meta:
+            for k, v in extra_meta.items():
+                update_doc[f"metadata.{k}"] = _bson_safe(v)
 
         result = db[INCIDENTS_COLLECTION].update_one(
             {"event_uuid": event_uuid},

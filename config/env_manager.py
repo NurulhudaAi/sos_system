@@ -8,8 +8,10 @@ import time
 
 class EnvManager:
     REQUIRED_VARS = {
+        "APP_ENV": "development",
         "MONGODB_URI": "mongodb://localhost:27017",
         "MONGODB_DB_NAME": "sos_system",
+        "RTSP_SECRET": "",
         "HELP_WEBHOOK_URL": "",
         "SOS_DB_PATH": "logs/sos_events.db",
         "FORCE_RECORD_ALERTS": "false"
@@ -76,6 +78,13 @@ class EnvManager:
         if not mongodb_uri.startswith(("mongodb://", "mongodb+srv://")):
             raise RuntimeError(f"Invalid MONGODB_URI format: {mongodb_uri}")
 
+        app_env = os.getenv("APP_ENV", "development").strip().lower()
+        rtsp_secret = os.getenv("RTSP_SECRET", "").strip()
+        if app_env == "production" and (not rtsp_secret or rtsp_secret == "sos-system-secret-key"):
+            raise RuntimeError(
+                "RTSP_SECRET must be set to a strong secret in .env when APP_ENV=production"
+            )
+
         return True
 
     @staticmethod
@@ -86,7 +95,7 @@ class EnvManager:
         print("="*60)
         for key in EnvManager.REQUIRED_VARS.keys():
             val = os.getenv(key, "")
-            if key in ("MONGODB_URI", "HELP_WEBHOOK_URL"):
+            if key in ("MONGODB_URI", "HELP_WEBHOOK_URL", "RTSP_SECRET"):
                 display = EnvManager._mask_sensitive(val)
             else:
                 display = val

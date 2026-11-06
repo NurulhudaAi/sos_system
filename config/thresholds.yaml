@@ -67,6 +67,7 @@ general:
   fall_pose_class_map:
     0: laying
     1: standing
+    2: sitting
   tracker_max_lost: 30
   tracker_iou_thresh: 0.3
   tracker_center_dist_norm: 0.12
@@ -96,9 +97,12 @@ hand_sos:
   min_crop_size: 48
 
 hands_over_head:
-  min_kp_conf: 0.3
-  confirm_seconds: 7.0       # 7-10s timeline
-  cooldown_seconds: 30      # 30s cooldown
+  min_kp_conf: 0.25
+  confirm_seconds: 6.5            # ท่าชูสองมือค้างเฉยๆ ต้องค้าง >= 6.5 วิ (ป้องกันคนยืดแขนบิดขี้เกียจ 2-4 วิ)
+  waving_confirm_seconds: 4.0     # ถ้าโบกมือซ้าย-ขวาไปมาเหนือหัว ยืนยันใน 4.0 วิ
+  triangle_confirm_seconds: 4.5   # ท่าประกบมือเป็นรูปสามเหลี่ยมกางศอกเหนือหัว ยืนยันใน 4.5 วิ
+  grace_seconds: 1.2              # ทนต่อภาพเบลอชั่วขณะตอนโบกมือเร็วๆ
+  cooldown_seconds: 30            # 30s cooldown
   margin_above_nose: 0.03
   triangle_wrist_max_sep_ratio: 0.40  # Option 1: triangle hands touching/close
   triangle_elbow_min_ratio: 0.50      # Option 1: elbows flared out to form triangle roof

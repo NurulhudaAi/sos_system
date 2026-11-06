@@ -49,12 +49,15 @@ class ZoneManager:
       1. Polygons:   {"name": "stairs", "type": "polygon", "points": [[x,y],...], "detectors": ["fall"]}
       2. Rectangles: {"name": "room", "x1": 0.1, "y1": 0.2, "x2": 0.8, "y2": 0.9, "detectors": ["hand_sos"]}
     """
+    FURNITURE_COCO_CLASSES = {"bench", "chair", "couch", "bed", "dining table", "sofa"}
+
     def __init__(self, path: Optional[str] = None, cam_id: str = "default", db=None):
         self.cam_id = str(cam_id)
         self.path = Path(path) if path else None
         self.db = db
         self.zones: List[Dict[str, Any]] = []
         self._compiled_polys: List[Optional[np.ndarray]] = []
+        self._auto_furniture: List[Dict[str, Any]] = []
 
         # Register instance for hot-reloads
         ZONE_MANAGERS[self.cam_id] = self
@@ -123,7 +126,7 @@ class ZoneManager:
                 if len(cleaned) >= 3:
                     poly_pts = np.array(cleaned, dtype=np.float32)
             new_zones.append(z_copy)
-            new_compiled.append(poly_pts)
+            new_compiled.append(poly_pts) 
 
         self.zones = new_zones
         self._compiled_polys = new_compiled
@@ -144,14 +147,63 @@ class ZoneManager:
         x2 = float(z.get("x2", 1.0)); y2 = float(z.get("y2", 1.0))
         return x1 <= cx <= x2 and y1 <= cy <= y2
 
+    def update_auto_furniture(self, odets: Optional[List[Dict[str, Any]]], w: int, h: int) -> None:
+        """Automatically accumulate persistent furniture bounding boxes from YOLO object detections."""
+        if not odets or w <= 0 or h <= 0:
+            return
+        now = time.time()
+        for od in odets:
+            cls_name = str(od.get("class_name") or od.get("label") or od.get("name") or "").lower().strip()
+            if cls_name not in self.FURNITURE_COCO_CLASSES:
+                continue
+            conf = float(od.get("confidence", od.get("conf", 0.0)))
+            if conf < 0.28:
+                continue
+            obbox = od.get("bbox")
+            if not obbox or len(obbox) < 4:
+                continue
+            nx1 = max(0.0, min(1.0, float(obbox[0]) / float(w)))
+            ny1 = max(0.0, min(1.0, float(obbox[1]) / float(h)))
+            nx2 = max(0.0, min(1.0, float(obbox[2]) / float(w)))
+            ny2 = max(0.0, min(1.0, float(obbox[3]) / float(h)))
+            if (nx2 - nx1) <= 0.02 or (ny2 - ny1) <= 0.02:
+                continue
+
+            matched = False
+            for fz in self._auto_furniture:
+                ix1, iy1 = max(nx1, fz["x1"]), max(ny1, fz["y1"])
+                ix2, iy2 = min(nx2, fz["x2"]), min(ny2, fz["y2"])
+                inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                area_a = (nx2 - nx1) * (ny2 - ny1)
+                area_b = (fz["x2"] - fz["x1"]) * (fz["y2"] - fz["y1"])
+                iou = inter / max(1e-6, area_a + area_b - inter)
+                if iou >= 0.25:
+                    fz["x1"] = 0.7 * fz["x1"] + 0.3 * nx1
+                    fz["y1"] = 0.7 * fz["y1"] + 0.3 * ny1
+                    fz["x2"] = 0.7 * fz["x2"] + 0.3 * nx2
+                    fz["y2"] = 0.7 * fz["y2"] + 0.3 * ny2
+                    fz["hits"] = fz.get("hits", 1) + 1
+                    fz["last_seen"] = now
+                    matched = True
+                    break
+            if not matched and len(self._auto_furniture) < 32:
+                self._auto_furniture.append({
+                    "name": f"auto-{cls_name}-{len(self._auto_furniture)+1}",
+                    "class_name": cls_name,
+                    "x1": nx1, "y1": ny1, "x2": nx2, "y2": ny2,
+                    "hits": 1,
+                    "last_seen": now,
+                })
+
     def furniture_at(self, kps, bbox, w: int, h: int) -> Optional[str]:
         """Return the furniture zone name if the person's body anchor lies inside one.
 
         Anchor = hip midpoint (most reliable for "what is the body resting on");
         falls back to the bbox centre when hips are not visible.
         Coordinates are normalised (0..1) like all other zones.
+        Also checks auto-detected furniture from YOLO object detections.
         """
-        if not self.zones or w <= 0 or h <= 0:
+        if w <= 0 or h <= 0:
             return None
         ax = ay = None
         try:
@@ -168,6 +220,12 @@ class ZoneManager:
         for i, z in enumerate(self.zones):
             if self._is_furniture(z) and self._point_in(i, z, nx, ny):
                 return z.get("name") or f"furniture-{i+1}"
+        by2 = float(bbox[3]) / float(h)
+        for fz in self._auto_furniture:
+            if fz.get("hits", 0) >= 2:
+                if fz["x1"] <= nx <= fz["x2"] and fz["y1"] <= ny <= fz["y2"]:
+                    if by2 <= fz["y2"] + 0.08:
+                        return fz.get("name", "auto-furniture")
         return None
 
     def in_zone(self, cx: float, cy: float, detector_type: Optional[str] = None) -> bool:
@@ -265,6 +323,63 @@ class ZoneManager:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(frame, tag, (x1 + 4, max(20, y1 - 6)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+class FallSceneVerifier:
+    """Stage-2 Multi-Frame Scene & Biomechanical Fall Verifier.
+
+    Inspects 3D/2D scene geometry, inter-person lower-body occlusion,
+    bottom-border frame truncation, and seated-furniture context before
+    allowing a Fall alert to be dispatched.
+    """
+    @staticmethod
+    def is_lower_body_occluded(bbox: List[float], all_bboxes: List[List[float]], w: int, h: int) -> bool:
+        """Return True if another foreground person occludes the bottom edge (y2) of `bbox`."""
+        if not bbox or len(bbox) < 4 or not all_bboxes:
+            return False
+        x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+        box_w = max(1.0, x2 - x1)
+        for ob in all_bboxes:
+            if not ob or len(ob) < 4:
+                continue
+            ox1, oy1, ox2, oy2 = [float(v) for v in ob[:4]]
+            if abs(ox1 - x1) < 2.0 and abs(oy1 - y1) < 2.0 and abs(ox2 - x2) < 2.0 and abs(oy2 - y2) < 2.0:
+                continue
+            # Foreground person's box spans across this person's bottom y2 and extends deeper down
+            if (oy1 - 0.02 * h) <= y2 <= (oy2 + 0.02 * h) and oy2 > (y2 + 0.04 * h):
+                inter_w = max(0.0, min(x2, ox2) - max(x1, ox1))
+                if inter_w >= 0.35 * box_w:
+                    return True
+        return False
+
+    @classmethod
+    def verify_fall_candidate(
+        cls,
+        tid: int,
+        fr: Dict[str, Any],
+        kps: Any,
+        bbox: List[float],
+        all_bboxes: List[List[float]],
+        w: int,
+        h: int,
+    ) -> bool:
+        """Verify that a candidate fall alert is a genuine floor fall and not an occlusion/edge/furniture artifact."""
+        if fr.get("on_furniture") or fr.get("is_sitting") or fr.get("is_crouching") or fr.get("is_seated_resting"):
+            return False
+        angle = float(fr.get("spine_angle", 90.0) or 90.0)
+        ratio = float(fr.get("bbox_ratio", 0.5) or 0.5)
+        if (
+            not fr.get("detect_foreshortened_fall")
+            and cls.is_lower_body_occluded(bbox, all_bboxes, w, h)
+            and angle >= 38.0
+            and ratio < 1.35
+        ):
+            return False
+        if len(bbox) >= 4 and h > 0 and w > 0:
+            x1, y1, x2, y2 = [float(v) for v in bbox[:4]]
+            # Bottom-edge or corner partial body truncation with upright/diagonal spine
+            if (y2 >= 0.965 * h or y1 >= 0.72 * h) and angle >= 40.0 and ratio < 1.35:
+                return False
+        return True
 
 class AlertDispatcher:
     LABELS = {

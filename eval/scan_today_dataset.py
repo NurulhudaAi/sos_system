@@ -67,7 +67,7 @@ def _are_both_arms_over_head(kps, conf_thresh=0.25):
 
 
 from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator
-from pipeline import ZoneManager
+from pipeline import ZoneManager, FallSceneVerifier
 
 
 
@@ -107,21 +107,9 @@ def nms_containment(dets, thresh=0.65):
 
 
 def save_snapshot_all_persons(snap_path, frame, all_assigned, alert_tid, alert_label, alert_color):
-    """Draws bounding boxes for EVERY person detected in the frame:
-    - Neutral people: gray box with [tid=X]
-    - Alert person: highlighted with alert_color and label.
-    """
+    """Draws bounding box ONLY for the person involved in the incident."""
     disp = frame.copy()
-    # 1. Background layer: other people in scene
-    for p in all_assigned:
-        p_tid = p.get("track_id")
-        if p_tid != alert_tid:
-            bx = p.get("bbox", [0, 0, 0, 0])
-            bx1, by1, bx2, by2 = [int(v) for v in bx]
-            cv2.rectangle(disp, (bx1, by1), (bx2, by2), (180, 180, 180), 2)
-            cv2.putText(disp, f"ID:{p_tid}", (bx1, max(15, by1 - 5)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1, cv2.LINE_AA)
-    # 2. Foreground layer: active alert person
+    # Only highlight the active alert person
     for p in all_assigned:
         p_tid = p.get("track_id")
         if p_tid == alert_tid:
@@ -158,9 +146,10 @@ def _dispatch_to_db(ev_type: str, lbl: str, conf: float, tid: int, bbox: list, s
             "critical_sos": "Critical",
             "fall": "High",
             "Fall": "High",
-            "hand_sos": "High",
-            "pose_sos": "High",
-            "Gesture": "High",
+            "hand_sos": "Medium",
+            "pose_sos": "Medium",
+            "Gesture": "Medium",
+            "gesture": "Medium",
         }
         raw_b64 = ""
         b64_url = ""
@@ -295,8 +284,10 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
         resp = api_detect_all(frame)
         pdets = nms_containment(resp.get("people", []))
         odets = resp.get("objects", [])
+        zones.update_auto_furniture(odets, w, h)
 
         assigned = tracker.update(pdets) if pdets else []
+        all_bboxes = [d.get("bbox", [0, 0, 0, 0]) for d in assigned]
 
         # Object Guardian
         for oa in obj_grd.update(clean_frame, odets, assigned, source_id=video_path.stem, t_sec=frame_ts):
@@ -363,15 +354,21 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
             cx = (bbox[0] + bbox[2]) / 2.0 / w
             cy = (bbox[1] + bbox[3]) / 2.0 / h
 
-            # 1. Fall Detection (gated by ZoneManager exclusion/inclusion)
+            # 1. Fall Detection (gated by ZoneManager exclusion/inclusion + Stage-2 FallSceneVerifier)
             in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
             if in_fall_zone:
-                fr = fall_d.process(tid, kps, bbox, h, w, posture_class=posture_class, posture_conf=posture_conf, timestamp=frame_ts,
-                                    on_furniture=bool(zones.furniture_at(kps, bbox, w, h)))
+                fr = fall_d.process(
+                    tid, kps, bbox, h, w,
+                    posture_class=posture_class,
+                    posture_conf=posture_conf,
+                    timestamp=frame_ts,
+                    on_furniture=bool(zones.furniture_at(kps, bbox, w, h)),
+                )
             else:
                 fr = {"is_fallen": False, "danger_lying": False, "is_critical": False, "is_down": False}
-            is_critical = fr.get("is_critical") and not fr.get("recovered_quickly")
-            is_confirmed = (fr.get("is_fallen") or fr.get("danger_lying")) and not fr.get("recovered_quickly")
+            scene_verified = FallSceneVerifier.verify_fall_candidate(tid, fr, kps, bbox, all_bboxes, w, h)
+            is_critical = fr.get("is_critical") and not fr.get("recovered_quickly") and scene_verified
+            is_confirmed = (fr.get("is_fallen") or fr.get("danger_lying")) and not fr.get("recovered_quickly") and scene_verified
             is_down = fr.get("is_down", False)
 
             # Post-Alert Recovery & Stood-Up Tracking (Action Plan)
@@ -383,6 +380,18 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                     if fall_stand_count[tid] >= 3 and not af.get("recovered"):
                         af["recovered"] = True
                         print(f"  🌟 [ACTION PLAN] tid={tid} stood up & recovered at {frame_ts:.1f}s!")
+                        rec_snap_name = f"recovery_tid{tid}_{int(frame_ts)}s.jpg"
+                        rec_snap_path = snap_dir / rec_snap_name
+                        rec_lbl = f"RECOVERED [tid={tid}] Stood Up {fr.get('spine_angle', 0):.0f}deg"
+                        save_snapshot_all_persons(rec_snap_path, clean_frame, assigned, tid, rec_lbl, (0, 200, 0))
+
+                        rec_b64_url = ""
+                        if rec_snap_path.exists():
+                            img = cv2.imread(str(rec_snap_path))
+                            if img is not None:
+                                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                rec_b64_url = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('utf-8')}"
+
                         if send_db and af.get("uuid"):
                             try:
                                 from database import resolve_incident
@@ -390,15 +399,19 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                                     af["uuid"],
                                     resolved_by="auto_recovery",
                                     notes=f"Subject recovered and stood up at t={frame_ts:.1f}s (upright angle={fr.get('spine_angle')}deg)",
-                                    post_event_status="RECOVERED_STAND_UP"
+                                    post_event_status="RECOVERED_STAND_UP",
+                                    recovery_snapshot_url=rec_b64_url,
+                                    recovery_image_path=str(rec_snap_path),
                                 )
-                            except Exception:
-                                pass
+                                print(f"    📸 [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_snap_name}")
+                            except Exception as e:
+                                print(f"    ⚠️ [DB RECOVERY ERROR] {e}")
                 else:
                     fall_stand_count[tid] = 0
 
             # Fall Lifecycle: 4s confirm -> 5s recovery window -> 10s total elapsed time to alert
             if is_confirmed or is_critical:
+                fall_stand_count[tid] = 0
                 if tid not in fall_first_down_ts:
                     fall_first_down_ts[tid] = fr.get("ground_time") or (frame_ts - 4.0)
 
@@ -437,19 +450,22 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                             ev_uuid = _dispatch_to_db("Fall", lbl, event_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
                         active_fall_alerts[tid] = {"uuid": ev_uuid, "alert_ts": frame_ts, "recovered": False}
             else:
-                # If person recovered during 5s recovery window (requires genuine upright standing posture or sitting)
+                # If person recovered during 5s recovery window (requires >=2 consecutive frames of upright standing or sitting)
                 is_recovery_stand = bool(
                     fr.get("recovered_quickly")
                     or fr.get("is_sitting")
                     or (not is_down and not fr.get("is_fallen") and fr.get("spine_angle", 0) >= 60.0)
                 )
                 if is_recovery_stand:
-                    if tid in fall_first_down_ts and (frame_ts - fall_first_down_ts[tid]) < fall_dispatch_delay:
-                        print(f"  ℹ️ [{frame_ts:6.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
-                    fall_first_down_ts.pop(tid, None)
+                    rec_c = fall_stand_count.get(tid, 0) + 1
+                    fall_stand_count[tid] = rec_c
+                    if rec_c >= 2 or fr.get("is_seated_resting"):
+                        if tid in fall_first_down_ts and (frame_ts - fall_first_down_ts[tid]) < fall_dispatch_delay:
+                            print(f"  ℹ️ [{frame_ts:6.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
+                        fall_first_down_ts.pop(tid, None)
                 if fr.get("is_sitting") or not fr.get("is_fallen"):
                     fall_ev[tid] = False
-                if fr.get("is_sitting"):
+                if fr.get("is_seated_resting"):
                     fall_first_down_ts.pop(tid, None)
 
             # 2. Distance-Adaptive & Pose SOS Processing

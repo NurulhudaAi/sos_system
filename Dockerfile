@@ -6,7 +6,11 @@ FROM python:3.11-slim
 # Prevent Python from writing .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    APP_ENV=production
+
+# Configurable PyTorch wheel index (defaults to CPU; override with cu121 for NVIDIA GPU servers)
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 WORKDIR /app
 
@@ -25,8 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Upgrade pip and pre-install build prerequisites
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Pre-install CPU-only PyTorch to avoid downloading ~2.3GB CUDA packages in Docker
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# Pre-install PyTorch from configurable index URL (CPU by default, or CUDA via --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121)
+RUN pip install --no-cache-dir torch torchvision --index-url ${TORCH_INDEX_URL}
 
 # Install Python requirements
 COPY requirements.txt .
