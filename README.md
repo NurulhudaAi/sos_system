@@ -99,9 +99,7 @@ sos_system/
 │
 ├── config/                       # การตั้งค่าระบบ
 │   ├── env_manager.py            # ตัวตรวจสอบและโหลด Environment variables
-│   ├── thresholds.yaml           # ค่าเกณฑ์ Sensitivity/เวลา/โมเดล ของทุก Detector
-│   ├── zones.yaml                # ค่าพิกัดพื้นที่โซนตรวจจับแบบคงที่ (Fallback)
-│   └── zone_mapping.yaml         # แมปปิ้งโซนกับกล้อง
+│   └── thresholds.yaml           # ค่าเกณฑ์ Sensitivity/เวลา/โมเดล ของทุก Detector (Full-Frame Zero-Config Detection)
 │
 ├── models/                       # ไฟล์น้ำหนักโมเดล Deep Learning (ไม่รวมใน Git)
 │   ├── yolov8m-pose.pt           # YOLOv8 Medium Pose สำหรับตรวจจับคนและ 17 Keypoints

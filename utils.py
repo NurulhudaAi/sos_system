@@ -290,37 +290,7 @@ def save_annotated_snapshot(
     img = frame.copy()
     ih, iw = img.shape[:2]
 
-    # Draw bounding boxes for all other people in the scene
-    if all_tracks:
-        for trk in all_tracks:
-            t_box = trk.get("bbox")
-            t_id = trk.get("track_id", trk.get("tid"))
-            if t_box is None:
-                continue
-            # Check if this person is the primary alert person (drawn on top below)
-            if bbox is not None and abs(t_box[0] - bbox[0]) < 10 and abs(t_box[1] - bbox[1]) < 10:
-                continue
-            tx1, ty1, tx2, ty2 = [float(v) for v in t_box]
-            if coord_size and len(coord_size) == 2:
-                cw, ch = coord_size
-                if cw > 0 and ch > 0 and (cw != iw or ch != ih):
-                    sx = iw / float(cw)
-                    sy = ih / float(ch)
-                    tx1, ty1, tx2, ty2 = tx1 * sx, ty1 * sy, tx2 * sx, ty2 * sy
-            tx1, ty1 = max(0, int(tx1)), max(0, int(ty1))
-            tx2, ty2 = min(iw - 1, int(tx2)), min(ih - 1, int(ty2))
-            cv2.rectangle(img, (tx1, ty1), (tx2, ty2), (180, 180, 180), 2)
-            cv2.putText(
-                img,
-                f"ID:{t_id}" if t_id is not None else "person",
-                (tx1, max(15, ty1 - 5)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (180, 180, 180),
-                1,
-                cv2.LINE_AA,
-            )
-
+    # Only draw the person involved in the incident (do not box uninvolved bystanders)
     if bbox is not None:
         bx1, by1, bx2, by2 = [float(v) for v in bbox]
         if coord_size and len(coord_size) == 2:

@@ -16,7 +16,10 @@ from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 import base64
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+except Exception:
+    AESGCM = None
 
 try:
     from dotenv import load_dotenv
@@ -397,11 +400,80 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
                 "state":        "InReview",
                 "reviewedAt":   _utcnow(),
                 "resolutionNotes": notes,
+                "updatedAt_sys": _utcnow(),
             }}
         )
         return result.modified_count > 0
     except Exception as e:
         logger.error(f"acknowledge_event error: {e}")
+        return False
+
+
+def resolve_incident(
+    event_uuid: str,
+    resolved_by: str = "auto_recovery",
+    notes: str = "",
+    post_event_status: Optional[str] = None,
+    recovery_snapshot_url: Optional[str] = None,
+    recovery_image_path: Optional[str] = None,
+    extra_meta: Optional[Dict] = None,
+) -> bool:
+    """Transition: state → Resolved (Action Plan for Post-Alert Recovery / Departure with Snapshot Proof)"""
+    db = _get_db()
+    try:
+        update_doc: Dict[str, Any] = {
+            "state": "Resolved",
+            "resolvedBy": resolved_by,
+            "resolvedAt": _utcnow(),
+            "resolutionNotes": notes,
+            "updatedAt_sys": _utcnow(),
+        }
+        if post_event_status:
+            update_doc["post_event_status"] = post_event_status
+            update_doc["metadata.post_event_status"] = post_event_status
+        if recovery_snapshot_url:
+            raw_rec_b64 = recovery_snapshot_url.split(",", 1)[1] if "," in str(recovery_snapshot_url) else str(recovery_snapshot_url)
+            update_doc["recoverySnapshotUrl"] = recovery_snapshot_url
+            update_doc["recovery_snapshot_base64"] = raw_rec_b64
+            update_doc["metadata.recoverySnapshotUrl"] = recovery_snapshot_url
+            update_doc["metadata.recovery_snapshot_base64"] = raw_rec_b64
+        if recovery_image_path:
+            update_doc["recoveryImagePath"] = str(recovery_image_path)
+            update_doc["metadata.recoveryImagePath"] = str(recovery_image_path)
+        if extra_meta:
+            for k, v in extra_meta.items():
+                update_doc[f"metadata.{k}"] = _bson_safe(v)
+
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_doc}
+        )
+        logger.info(f"Incident {event_uuid} resolved ({resolved_by}): {notes}")
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"resolve_incident error for {event_uuid}: {e}")
+        return False
+
+
+def update_incident_notes(event_uuid: str, notes: str, extra_meta: Optional[Dict] = None) -> bool:
+    """Append or update incident notes / metadata (e.g. subject left frame)"""
+    db = _get_db()
+    try:
+        update_set: Dict[str, Any] = {
+            "resolutionNotes": notes,
+            "updatedAt_sys": _utcnow(),
+        }
+        if extra_meta:
+            for k, v in extra_meta.items():
+                update_set[f"metadata.{k}"] = _bson_safe(v)
+
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_set}
+        )
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"update_incident_notes error for {event_uuid}: {e}")
         return False
 
 

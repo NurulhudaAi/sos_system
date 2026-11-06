@@ -27,17 +27,18 @@ class HelpRequestDispatcher:
         """Determine if event should trigger help request.
 
         Rules:
-        - hand_sos: ALL severities
+        - hand_sos / pose_sos / critical_sos / gesture: ALL severities
         - fall: severity >= 2 (HIGH or CRITICAL)
         - others: NO
         """
         if not self.enabled:
             return False
 
-        if event_type in ("hand_sos"):
-            return True  # ALL hand SOS — explicit human gesture for help
+        etype = str(event_type).lower()
+        if etype in ("hand_sos", "pose_sos", "critical_sos", "gesture"):
+            return True  # ALL SOS gestures — explicit human gesture for help
 
-        if event_type == "fall" and severity >= 2:  # MED (1) < HIGH (2) <= CRITICAL (3)
+        if etype == "fall" and int(severity) >= 2:  # MED (1) < HIGH (2) <= CRITICAL (3)
             return True
 
         return False

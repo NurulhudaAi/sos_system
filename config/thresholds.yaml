@@ -28,7 +28,9 @@ danger:
 fall:
   bbox_ratio_thresh: 1.4   # [QA] was 1.2 — arms out / sitting stretched passed
   confirm_seconds: 4.0
-  cooldown_seconds: 120
+  recover_seconds: 5.0
+  dispatch_delay_seconds: 10.0
+  cooldown_seconds: 60
   critical_seconds: 30.0
   danger_lying_seconds: 15.0
   danger_max_seconds: 120.0
@@ -39,14 +41,13 @@ fall:
   history_len: 16
   lying_angle_thresh: 40.0
   motion_thresh_norm: 0.02
-  recover_seconds: 5.0
   spike_thresh_norm: 0.18
   min_model_conf: 0.5      # [QA] was 0.25 — model shortcut fired on weak calls
   model_confirm_seconds: 3.0
   fall_pose_iou_thresh: 0.3
   fall_pose_containment_fallback: true
   fall_hysteresis_factor: 2.0
-  spine_angle_thresh: 55.0
+  spine_angle_thresh: 42.0
   sustain_seconds: 1.0
   temporal_threshold: 0.4
   temporal_window: 10
@@ -66,6 +67,7 @@ general:
   fall_pose_class_map:
     0: laying
     1: standing
+    2: sitting
   tracker_max_lost: 30
   tracker_iou_thresh: 0.3
   tracker_center_dist_norm: 0.12
@@ -73,9 +75,9 @@ hand_sos:
   cooldown_seconds: 30
   min_detection_confidence: 0.30
   min_hand_bbox_area_norm: 0.002
-  min_kp_conf: 0.35
+  min_kp_conf: 0.25
   min_tracking_confidence: 0.25
-  temporal_threshold: 0.30   # [QA] was 0.20 (=2 hits/10) → now 3 hits
+  temporal_threshold: 0.20   # 2 hits out of 10 frames
   temporal_window: 10
   thumb_in_ratio: 0.75
   fingers_closed_ratio: 1.35
@@ -85,19 +87,25 @@ hand_sos:
   # [FIX-FP] temporal persistence ลด false positive
   fingers_closed_strict_ratio: 1.20
   fast_sos_min_hand_span: 0.04
-  min_consec_sos_frames: 2   # [QA] was 1
+  min_consec_sos_frames: 2
   # [PRODUCTION FINE-TUNING]
   elevation_gate_enabled: true
+  elevation_torso_ratio: 0.55
   wrist_crop_enabled: true
   elevation_margin_norm: 0.05
-  wrist_crop_padding: 1.4
-  min_crop_size: 160
+  wrist_crop_padding: 1.35
+  min_crop_size: 48
 
 hands_over_head:
-  min_kp_conf: 0.3
-  confirm_seconds: 2.5
-  cooldown_seconds: 60
+  min_kp_conf: 0.25
+  confirm_seconds: 6.5            # ท่าชูสองมือค้างเฉยๆ ต้องค้าง >= 6.5 วิ (ป้องกันคนยืดแขนบิดขี้เกียจ 2-4 วิ)
+  waving_confirm_seconds: 4.0     # ถ้าโบกมือซ้าย-ขวาไปมาเหนือหัว ยืนยันใน 4.0 วิ
+  triangle_confirm_seconds: 4.5   # ท่าประกบมือเป็นรูปสามเหลี่ยมกางศอกเหนือหัว ยืนยันใน 4.5 วิ
+  grace_seconds: 1.2              # ทนต่อภาพเบลอชั่วขณะตอนโบกมือเร็วๆ
+  cooldown_seconds: 30            # 30s cooldown
   margin_above_nose: 0.03
+  triangle_wrist_max_sep_ratio: 0.40  # Option 1: triangle hands touching/close
+  triangle_elbow_min_ratio: 0.50      # Option 1: elbows flared out to form triangle roof
 
 object_guardian:
   cooldown_seconds: 60

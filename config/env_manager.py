@@ -8,8 +8,10 @@ import time
 
 class EnvManager:
     REQUIRED_VARS = {
+        "APP_ENV": "development",
         "MONGODB_URI": "mongodb://localhost:27017",
         "MONGODB_DB_NAME": "sos_system",
+        "RTSP_SECRET": "",
         "HELP_WEBHOOK_URL": "",
         "SOS_DB_PATH": "logs/sos_events.db",
         "FORCE_RECORD_ALERTS": "false"
@@ -26,7 +28,7 @@ class EnvManager:
             for key, default in EnvManager.REQUIRED_VARS.items():
                 content += f"{key}={default}\n"
             env_file.write_text(content)
-            print(f"✅ Created {env_path}")
+            print(f"Created {env_path}")
 
             if require_edit:
                 print("⏳ Waiting for you to edit .env with your MongoDB connection...")
@@ -39,7 +41,7 @@ class EnvManager:
                     try:
                         mtime_after = env_file.stat().st_mtime
                         if mtime_after > mtime_before:
-                            print("✅ .env file updated, proceeding...")
+                            print(".env file updated, proceeding...")
                             break
                     except:
                         pass
@@ -68,13 +70,20 @@ class EnvManager:
 
         if not mongodb_uri or mongodb_uri == "mongodb://localhost:27017":
             raise RuntimeError(
-                "❌ MONGODB_URI not configured in .env\n"
+                "MONGODB_URI not configured in .env\n"
                 "   Edit .env with your MongoDB Atlas connection string"
             )
 
         # Basic format check
         if not mongodb_uri.startswith(("mongodb://", "mongodb+srv://")):
-            raise RuntimeError(f"❌ Invalid MONGODB_URI format: {mongodb_uri}")
+            raise RuntimeError(f"Invalid MONGODB_URI format: {mongodb_uri}")
+
+        app_env = os.getenv("APP_ENV", "development").strip().lower()
+        rtsp_secret = os.getenv("RTSP_SECRET", "").strip()
+        if app_env == "production" and (not rtsp_secret or rtsp_secret == "sos-system-secret-key"):
+            raise RuntimeError(
+                "RTSP_SECRET must be set to a strong secret in .env when APP_ENV=production"
+            )
 
         return True
 
@@ -86,7 +95,7 @@ class EnvManager:
         print("="*60)
         for key in EnvManager.REQUIRED_VARS.keys():
             val = os.getenv(key, "")
-            if key in ("MONGODB_URI", "HELP_WEBHOOK_URL"):
+            if key in ("MONGODB_URI", "HELP_WEBHOOK_URL", "RTSP_SECRET"):
                 display = EnvManager._mask_sensitive(val)
             else:
                 display = val
@@ -129,5 +138,5 @@ def init_env(env_path=".env", require_edit=True):
         EnvManager.show_config()
         return True
     except Exception as e:
-        print(f"❌ Environment initialization failed: {e}")
+        print(f"Environment initialization failed: {e}")
         return False
