@@ -1,0 +1,149 @@
+I0000 00:00:1793458843.732382 12131470 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+W0000 00:00:1793458843.752200 12131471 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1793458843.776789 12131471 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1793458844.286605 12131475 landmark_projection_calculator.cc:81] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
+I0000 00:00:1793459413.764246 12139258 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1793459413.767587 12139260 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1793459413.771089 12139259 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+I0000 00:00:1793459605.911506 12141853 gl_context.cc:407] GL version: 2.1 (2.1 Metal - 90.5), renderer: Apple M1
+W0000 00:00:1793459605.914760 12141854 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1793459605.917689 12141854 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+OpenCV: Couldn't read video stream from file "eval/videos/D1-Stair-FL2 1.mp4"
+OpenCV: Couldn't read video stream from file "eval/videos/D1-Stair-FL2 2.mp4"
+OpenCV: Couldn't read video stream from file "eval/videos/E1-Hall 1.mp4"
+OpenCV: Couldn't read video stream from file "eval/videos/E1-Hall 2.mp4"
+Found 7 video(s) to scan. Send to DB: False
+
+======================================================================
+🎬 Scanning: C1-FL1-Lift.avi
+   Resolution: 2688x1520 | FPS: 8.0 | Duration: 425.9s (3393 frames)
+======================================================================
+HandSOSDetector ready ✓
+   [  2.9%] frame 100/3393 (12.6s) @ 6.0 FPS | events found: 0
+   [  5.9%] frame 200/3393 (25.1s) @ 6.0 FPS | events found: 0
+   [  8.8%] frame 300/3393 (37.7s) @ 6.0 FPS | events found: 0
+   [ 11.8%] frame 400/3393 (50.2s) @ 6.0 FPS | events found: 0
+   [ 14.7%] frame 500/3393 (62.8s) @ 6.0 FPS | events found: 0
+   [ 17.7%] frame 600/3393 (75.3s) @ 5.9 FPS | events found: 0
+   [ 20.6%] frame 700/3393 (87.9s) @ 5.8 FPS | events found: 0
+   [ 23.6%] frame 800/3393 (100.4s) @ 5.8 FPS | events found: 0
+   [ 26.5%] frame 900/3393 (113.0s) @ 5.7 FPS | events found: 0
+   [ 29.5%] frame 1000/3393 (125.5s) @ 5.7 FPS | events found: 0
+   [ 32.4%] frame 1100/3393 (138.1s) @ 5.7 FPS | events found: 0
+  🙌 [ 143.1s] GESTURE SOS [tid=11] Hands Overhead (V) Multi-Modal held=7.5s -> gesture_pose_tid11_143s.jpg (Event Conf: 0.99, Person Conf: 0.92)
+   [ 35.4%] frame 1200/3393 (150.6s) @ 5.7 FPS | events found: 1
+   [ 38.3%] frame 1300/3393 (163.2s) @ 5.7 FPS | events found: 1
+   [ 41.3%] frame 1400/3393 (175.7s) @ 5.7 FPS | events found: 1
+  🙌 [ 182.3s] GESTURE SOS [tid=3] Hands Overhead (V) Multi-Modal held=7.0s -> gesture_pose_tid3_182s.jpg (Event Conf: 0.99, Person Conf: 0.91)
+  🙌 [ 182.8s] GESTURE SOS [tid=11] Hands Overhead (V) held=7.0s -> gesture_pose_tid11_182s.jpg (Event Conf: 0.99, Person Conf: 0.92)
+   [ 44.2%] frame 1500/3393 (188.3s) @ 5.7 FPS | events found: 3
+   [ 47.2%] frame 1600/3393 (200.8s) @ 5.7 FPS | events found: 3
+   [ 50.1%] frame 1700/3393 (213.4s) @ 5.8 FPS | events found: 3
+   [ 53.1%] frame 1800/3393 (225.9s) @ 5.8 FPS | events found: 3
+   [ 56.0%] frame 1900/3393 (238.5s) @ 5.8 FPS | events found: 3
+   [ 58.9%] frame 2000/3393 (251.0s) @ 5.8 FPS | events found: 3
+   [ 61.9%] frame 2100/3393 (263.6s) @ 5.8 FPS | events found: 3
+   [ 64.8%] frame 2200/3393 (276.1s) @ 5.9 FPS | events found: 3
+   [ 67.8%] frame 2300/3393 (288.7s) @ 5.9 FPS | events found: 3
+   [ 70.7%] frame 2400/3393 (301.2s) @ 5.8 FPS | events found: 3
+   [ 73.7%] frame 2500/3393 (313.8s) @ 5.8 FPS | events found: 3
+  🚨 [ 320.1s] FALL [tid=2] angle=2deg down=10.0s -> fall_tid2_320s.jpg (Event Conf: 0.95, Person Conf: 0.90)
+  🚨 [ 321.8s] FALL [tid=11] angle=31deg down=10.0s -> fall_tid11_321s.jpg (Event Conf: 0.88, Person Conf: 0.88)
+   [ 76.6%] frame 2600/3393 (326.3s) @ 5.9 FPS | events found: 5
+  🌟 [ACTION PLAN] tid=11 stood up & recovered at 329.1s!
+  🌟 [ACTION PLAN] tid=2 stood up & recovered at 330.1s!
+   [ 79.6%] frame 2700/3393 (338.9s) @ 5.9 FPS | events found: 5
+   [ 82.5%] frame 2800/3393 (351.4s) @ 5.9 FPS | events found: 5
+   [ 85.5%] frame 2900/3393 (364.0s) @ 5.9 FPS | events found: 5
+   [ 88.4%] frame 3000/3393 (376.6s) @ 5.9 FPS | events found: 5
+   [ 91.4%] frame 3100/3393 (389.1s) @ 5.9 FPS | events found: 5
+   [ 94.3%] frame 3200/3393 (401.7s) @ 5.9 FPS | events found: 5
+   [ 97.3%] frame 3300/3393 (414.2s) @ 6.0 FPS | events found: 5
+✅ Completed C1-FL1-Lift.avi in 570.0s (6.0 FPS) -> Total events: 5
+
+======================================================================
+🎬 Scanning: D1-1st-Floor.mp4
+   Resolution: 1280x960 | FPS: 15.0 | Duration: 89.4s (1341 frames)
+======================================================================
+HandSOSDetector ready ✓
+   [  7.5%] frame 100/1341 (6.7s) @ 7.2 FPS | events found: 0
+   [ 14.9%] frame 200/1341 (13.3s) @ 7.5 FPS | events found: 0
+   [ 22.4%] frame 300/1341 (20.0s) @ 7.5 FPS | events found: 0
+   [ 29.8%] frame 400/1341 (26.7s) @ 7.5 FPS | events found: 0
+   [ 37.3%] frame 500/1341 (33.3s) @ 7.4 FPS | events found: 0
+   [ 44.7%] frame 600/1341 (40.0s) @ 7.3 FPS | events found: 0
+   [ 52.2%] frame 700/1341 (46.7s) @ 7.2 FPS | events found: 0
+  🚨 [  48.3s] FALL [tid=12] angle=18deg down=10.0s -> fall_tid12_48s.jpg (Event Conf: 0.94, Person Conf: 0.89)
+  🚨 [  48.4s] FALL [tid=0] angle=19deg down=10.0s -> fall_tid0_48s.jpg (Event Conf: 0.95, Person Conf: 0.92)
+   [ 59.7%] frame 800/1341 (53.3s) @ 7.0 FPS | events found: 2
+  🌟 [ACTION PLAN] tid=12 stood up & recovered at 56.5s!
+  🌟 [ACTION PLAN] tid=0 stood up & recovered at 56.7s!
+   [ 67.1%] frame 900/1341 (60.0s) @ 6.9 FPS | events found: 2
+   [ 74.6%] frame 1000/1341 (66.7s) @ 6.9 FPS | events found: 2
+   [ 82.0%] frame 1100/1341 (73.3s) @ 6.9 FPS | events found: 2
+   [ 89.5%] frame 1200/1341 (80.0s) @ 7.0 FPS | events found: 2
+   [ 96.9%] frame 1300/1341 (86.7s) @ 7.0 FPS | events found: 2
+✅ Completed D1-1st-Floor.mp4 in 192.1s (7.0 FPS) -> Total events: 2
+
+======================================================================
+🎬 Scanning: D1-Carpark.mp4
+   Resolution: 2688x1520 | FPS: 7.9 | Duration: 640.1s (5082 frames)
+======================================================================
+HandSOSDetector ready ✓
+   [  2.0%] frame 100/5082 (12.6s) @ 6.1 FPS | events found: 0
+   [  3.9%] frame 200/5082 (25.2s) @ 6.5 FPS | events found: 0
+   [  5.9%] frame 300/5082 (37.8s) @ 6.5 FPS | events found: 0
+   [  7.9%] frame 400/5082 (50.4s) @ 6.6 FPS | events found: 0
+   [  9.8%] frame 500/5082 (63.0s) @ 6.6 FPS | events found: 0
+   [ 11.8%] frame 600/5082 (75.6s) @ 6.6 FPS | events found: 0
+   [ 13.8%] frame 700/5082 (88.2s) @ 6.6 FPS | events found: 0
+   [ 15.7%] frame 800/5082 (100.8s) @ 6.5 FPS | events found: 0
+   [ 17.7%] frame 900/5082 (113.4s) @ 6.4 FPS | events found: 0
+   [ 19.7%] frame 1000/5082 (126.0s) @ 6.3 FPS | events found: 0
+   [ 21.6%] frame 1100/5082 (138.5s) @ 6.2 FPS | events found: 0
+   [ 23.6%] frame 1200/5082 (151.1s) @ 6.2 FPS | events found: 0
+   [ 25.6%] frame 1300/5082 (163.7s) @ 6.1 FPS | events found: 0
+   [ 27.5%] frame 1400/5082 (176.3s) @ 6.0 FPS | events found: 0
+   [ 29.5%] frame 1500/5082 (188.9s) @ 5.8 FPS | events found: 0
+   [ 31.5%] frame 1600/5082 (201.5s) @ 5.7 FPS | events found: 0
+   [ 33.5%] frame 1700/5082 (214.1s) @ 5.7 FPS | events found: 0
+   [ 35.4%] frame 1800/5082 (226.7s) @ 5.7 FPS | events found: 0
+   [ 37.4%] frame 1900/5082 (239.3s) @ 5.6 FPS | events found: 0
+   [ 39.4%] frame 2000/5082 (251.9s) @ 5.5 FPS | events found: 0
+   [ 41.3%] frame 2100/5082 (264.5s) @ 5.5 FPS | events found: 0
+   [ 43.3%] frame 2200/5082 (277.1s) @ 5.5 FPS | events found: 0
+   [ 45.3%] frame 2300/5082 (289.7s) @ 5.5 FPS | events found: 0
+   [ 47.2%] frame 2400/5082 (302.3s) @ 5.5 FPS | events found: 0
+   [ 49.2%] frame 2500/5082 (314.9s) @ 5.5 FPS | events found: 0
+   [ 51.2%] frame 2600/5082 (327.5s) @ 5.5 FPS | events found: 0
+   [ 53.1%] frame 2700/5082 (340.1s) @ 5.6 FPS | events found: 0
+   [ 55.1%] frame 2800/5082 (352.7s) @ 5.6 FPS | events found: 0
+   [ 57.1%] frame 2900/5082 (365.3s) @ 5.6 FPS | events found: 0
+   [ 59.0%] frame 3000/5082 (377.9s) @ 5.6 FPS | events found: 0
+   [ 61.0%] frame 3100/5082 (390.5s) @ 5.6 FPS | events found: 0
+   [ 63.0%] frame 3200/5082 (403.1s) @ 5.6 FPS | events found: 0
+   [ 64.9%] frame 3300/5082 (415.6s) @ 5.5 FPS | events found: 0
+   [ 66.9%] frame 3400/5082 (428.2s) @ 5.5 FPS | events found: 0
+   [ 68.9%] frame 3500/5082 (440.8s) @ 5.5 FPS | events found: 0
+   [ 70.8%] frame 3600/5082 (453.4s) @ 5.6 FPS | events found: 0
+   [ 72.8%] frame 3700/5082 (466.0s) @ 5.6 FPS | events found: 0
+   [ 74.8%] frame 3800/5082 (478.6s) @ 5.6 FPS | events found: 0
+   [ 76.7%] frame 3900/5082 (491.2s) @ 5.6 FPS | events found: 0
+   [ 78.7%] frame 4000/5082 (503.8s) @ 5.5 FPS | events found: 0
+   [ 80.7%] frame 4100/5082 (516.4s) @ 5.5 FPS | events found: 0
+   [ 82.6%] frame 4200/5082 (529.0s) @ 5.4 FPS | events found: 0
+   [ 84.6%] frame 4300/5082 (541.6s) @ 5.4 FPS | events found: 0
+   [ 86.6%] frame 4400/5082 (554.2s) @ 5.4 FPS | events found: 0
+   [ 88.5%] frame 4500/5082 (566.8s) @ 5.4 FPS | events found: 0
+   [ 90.5%] frame 4600/5082 (579.4s) @ 5.4 FPS | events found: 0
+   [ 92.5%] frame 4700/5082 (592.0s) @ 5.4 FPS | events found: 0
+✅ Completed D1-Carpark.mp4 in 871.5s (5.4 FPS) -> Total events: 0
+❌ Cannot open D1-Stair-FL2 1.mp4
+❌ Cannot open D1-Stair-FL2 2.mp4
+❌ Cannot open E1-Hall 1.mp4
+❌ Cannot open E1-Hall 2.mp4
+
+🎉 All videos scanned! Report saved to:
+  - eval/scan_regression_after_171c782_82b33bc/scan_summary.md
+  - eval/scan_regression_after_171c782_82b33bc/scan_summary.json

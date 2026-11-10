@@ -6,12 +6,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     container_name: sos-model-server
     command: ["python3", "model_server.py"]
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+    # สำหรับเครื่อง Server ที่มี NVIDIA GPU ให้เปิดใช้ส่วน deploy ด้านล่างและตั้งค่า TORCH_INDEX_URL=https://download.pytorch.org/whl/cu121
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
     volumes:
       - ./models:/app/models
       - ./logs:/app/logs
@@ -32,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     container_name: sos-pipeline
     # ค่าเริ่มต้นรันดึงกล้อง Active จาก MongoDB Atlas
     # สามารถปรับเปลี่ยน command ได้ เช่น: ["python3", "main.py", "--source", "/app/videos/sample.mp4"]
@@ -43,6 +57,7 @@ services:
       - .env
     environment:
       - DETECTOR_URL=http://model-server:8000
+      - APP_ENV=${APP_ENV:-production}
     ports:
       - "8081:8081"
     volumes:

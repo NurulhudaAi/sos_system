@@ -105,8 +105,15 @@ class HungarianTracker:
                     dets[c]["track_id"] = tid
 
         # ── Stage 2: Fall / Shape-Change Recovery via Centroid Matching ────
-        # Handles posture collapse (standing -> lying) where IoU drops drastically
-        unmatched_track_ids = [tid for tid in track_ids if tid not in matched_tracks]
+        # Handles posture collapse (standing -> lying) where IoU drops drastically.
+        # Strict temporal and spatial gating:
+        # 1. Only for tracks lost very recently (lost <= 5 frames / ~0.6s)
+        # 2. In a fall, the person collapses IN PLACE (dx <= 4% of frame width)
+        #    People cannot teleport across the room into a fall.
+        unmatched_track_ids = [
+            tid for tid in track_ids
+            if tid not in matched_tracks and self.tracks[tid].get("lost", 0) <= 5
+        ]
         unmatched_det_indices = [j for j in range(num_dets) if j not in matched_dets]
 
         if unmatched_track_ids and unmatched_det_indices:
@@ -115,21 +122,22 @@ class HungarianTracker:
             )
             for i, tid in enumerate(unmatched_track_ids):
                 t = self.tracks[tid]
-                # Predict position using estimated velocity
-                pred_cx = t["center"][0] + t["velocity"][0] * max(1, t["lost"])
-                pred_cy = t["center"][1] + t["velocity"][1] * max(1, t["lost"])
+                last_cx, last_cy = t["center"]
                 for j, d_idx in enumerate(unmatched_det_indices):
                     d_center = self._box_center(dets[d_idx]["bbox"])
-                    dist_norm = self._dist_norm((pred_cx, pred_cy), d_center)
-                    # Gating threshold
-                    if dist_norm > self.max_dist_norm:
-                        dist_cost[i, j] = 1000.0  # Prohibit match
+                    dx_norm = abs(last_cx - d_center[0]) / max(1.0, float(self.frame_w))
+                    dist_norm = self._dist_norm((last_cx, last_cy), d_center)
+
+                    # In-place collapse gating:
+                    # dx must be <= 0.08 (in-place collapse) and dist_norm <= 0.12 (prohibits cross-room jumps > 0.30)
+                    if dx_norm > 0.08 or dist_norm > 0.12:
+                        dist_cost[i, j] = 1000.0  # Prohibit match across distant people
                     else:
                         dist_cost[i, j] = dist_norm
 
             r_ind, c_ind = linear_sum_assignment(dist_cost)
             for r, c in zip(r_ind, c_ind):
-                if dist_cost[r, c] <= self.max_dist_norm:
+                if dist_cost[r, c] <= 0.12:
                     tid = unmatched_track_ids[r]
                     d_idx = unmatched_det_indices[c]
                     matched_tracks.add(tid)
@@ -229,3 +237,31 @@ class SpatialAlertDeduplicator:
         # Not duplicate -> record this alert
         self._history[event_type].append((cx, cy, now_ts))
         return False
+
+
+def nms_containment(dets: List[Dict[str, Any]], thresh: float = 0.65) -> List[Dict[str, Any]]:
+    """Suppresses nested/contained person detections (e.g. upper-body inside full-body)."""
+    if len(dets) <= 1:
+        return dets
+    sorted_dets = sorted(
+        dets,
+        key=lambda d: (d['bbox'][2] - d['bbox'][0]) * (d['bbox'][3] - d['bbox'][1]),
+        reverse=True,
+    )
+    kept = []
+    for d in sorted_dets:
+        b1 = d['bbox']
+        area1 = (b1[2] - b1[0]) * (b1[3] - b1[1])
+        contained = False
+        for k in kept:
+            b2 = k['bbox']
+            ix1, iy1 = max(b1[0], b2[0]), max(b1[1], b2[1])
+            ix2, iy2 = min(b1[2], b2[2]), min(b1[3], b2[3])
+            iw, ih = max(0, ix2 - ix1), max(0, iy2 - iy1)
+            inter = iw * ih
+            if inter / (area1 + 1e-6) >= thresh:
+                contained = True
+                break
+        if not contained:
+            kept.append(d)
+    return kept

@@ -1,0 +1,194 @@
+{
+  "C1-FL1-Lift.avi": [
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 139.58,
+      "frame_idx": 1112,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=11] Hands Overhead (V) held=4.0s",
+      "confidence": 0.96,
+      "person_confidence": 0.92,
+      "track_id": 11,
+      "bbox": [
+        547,
+        220,
+        788,
+        602
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid11_139s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=False, time_held=4.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 171.21,
+      "frame_idx": 1364,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=11] Hands Overhead (V) held=4.0s",
+      "confidence": 0.96,
+      "person_confidence": 0.92,
+      "track_id": 11,
+      "bbox": [
+        582,
+        237,
+        798,
+        617
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid11_171s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=False, time_held=4.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 179.24,
+      "frame_idx": 1428,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=3] Hands Overhead (V) Multi-Modal held=4.0s",
+      "confidence": 0.96,
+      "person_confidence": 0.93,
+      "track_id": 3,
+      "bbox": [
+        802,
+        260,
+        1081,
+        597
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/gesture_pose_tid3_179s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=True, time_held=4.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 320.07,
+      "frame_idx": 2550,
+      "event_type": "Fall",
+      "label": "FALL [tid=2] angle=2deg down=10.0s",
+      "confidence": 0.95,
+      "person_confidence": 0.9,
+      "track_id": 2,
+      "bbox": [
+        931,
+        600,
+        1272,
+        741
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid2_320s.jpg",
+      "details": "angle=2.0 ratio=2.41 time_down=10.0s"
+    },
+    {
+      "video": "C1-FL1-Lift.avi",
+      "timestamp_sec": 321.83,
+      "frame_idx": 2564,
+      "event_type": "Fall",
+      "label": "FALL [tid=11] angle=31deg down=10.0s",
+      "confidence": 0.88,
+      "person_confidence": 0.88,
+      "track_id": 11,
+      "bbox": [
+        689,
+        534,
+        870,
+        753
+      ],
+      "snapshot": "snapshots/C1-FL1-Lift/fall_tid11_321s.jpg",
+      "details": "angle=30.6 ratio=0.82 time_down=10.0s"
+    }
+  ],
+  "D1-1st-Floor.mp4": [
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 48.27,
+      "frame_idx": 724,
+      "event_type": "Fall",
+      "label": "FALL [tid=12] angle=18deg down=10.0s",
+      "confidence": 0.94,
+      "person_confidence": 0.89,
+      "track_id": 12,
+      "bbox": [
+        247,
+        538,
+        713,
+        767
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid12_48s.jpg",
+      "details": "angle=18.3 ratio=2.04 time_down=10.0s"
+    },
+    {
+      "video": "D1-1st-Floor.mp4",
+      "timestamp_sec": 48.27,
+      "frame_idx": 724,
+      "event_type": "Fall",
+      "label": "FALL [tid=0] angle=18deg down=10.0s",
+      "confidence": 0.95,
+      "person_confidence": 0.92,
+      "track_id": 0,
+      "bbox": [
+        903,
+        585,
+        1318,
+        773
+      ],
+      "snapshot": "snapshots/D1-1st-Floor/fall_tid0_48s.jpg",
+      "details": "angle=18.5 ratio=2.21 time_down=10.0s"
+    }
+  ],
+  "D1-Carpark.mp4": [],
+  "D1-Stair-FL2 1.mp4": [
+    {
+      "video": "D1-Stair-FL2 1.mp4",
+      "timestamp_sec": 147.75,
+      "frame_idx": 1176,
+      "event_type": "Fall",
+      "label": "FALL [tid=1] angle=37deg down=10.0s",
+      "confidence": 0.88,
+      "person_confidence": 0.44,
+      "track_id": 1,
+      "bbox": [
+        1510,
+        407,
+        1613,
+        498
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 1/fall_tid1_147s.jpg",
+      "details": "angle=37.2 ratio=1.13 time_down=10.0s"
+    }
+  ],
+  "D1-Stair-FL2 2.mp4": [
+    {
+      "video": "D1-Stair-FL2 2.mp4",
+      "timestamp_sec": 24.87,
+      "frame_idx": 198,
+      "event_type": "Gesture",
+      "label": "GESTURE SOS [tid=6] Hands Overhead (V) held=4.0s",
+      "confidence": 0.96,
+      "person_confidence": 0.91,
+      "track_id": 6,
+      "bbox": [
+        1249,
+        219,
+        1375,
+        508
+      ],
+      "snapshot": "snapshots/D1-Stair-FL2 2/gesture_pose_tid6_24s.jpg",
+      "details": "gesture_option=hands_overhead_v, fused=False, time_held=4.0s"
+    }
+  ],
+  "E1-Hall 1.mp4": [
+    {
+      "video": "E1-Hall 1.mp4",
+      "timestamp_sec": 134.88,
+      "frame_idx": 1074,
+      "event_type": "Fall",
+      "label": "FALL [tid=1] angle=66deg down=10.0s",
+      "confidence": 0.83,
+      "person_confidence": 0.46,
+      "track_id": 1,
+      "bbox": [
+        675,
+        562,
+        818,
+        770
+      ],
+      "snapshot": "snapshots/E1-Hall 1/fall_tid1_134s.jpg",
+      "details": "angle=65.8 ratio=0.68 time_down=10.0s"
+    }
+  ],
+  "E1-Hall 2.mp4": []
+}

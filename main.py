@@ -76,7 +76,7 @@ from detectors.fall_detector            import FallDetector
 from detectors.hand_sos_detector        import HandSOSDetector
 from detectors.hands_over_head_detector import HandsOverHeadDetector
 from detectors.object_guardian          import ObjectGuardian
-from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher
+from pipeline                    import CooldownEngine, ZoneManager, AlertDispatcher, FallSceneVerifier
 from help_request_dispatcher     import HelpRequestDispatcher
 from utils                       import preprocess, Visualizer, add_sos_badge, create_bbox_snapshot_base64, save_annotated_snapshot
 from vlc_stream                  import VLCStreamManager
@@ -124,7 +124,7 @@ class BoxesWrapper:
 class KeypointsWrapper:
     def __init__(self,data): self.data=[_W(d) for d in data] if data else None
 
-from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator
+from tracker import HungarianTracker, SimpleTracker, SpatialAlertDeduplicator, nms_containment
 
 
 def _api(endpoint, frame, timeout=5):
@@ -189,7 +189,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
         try:
             url=vlc_mgr.start()
         except RuntimeError as e:
-            print(f"\n❌ [VLC] ERROR: {e}")
+            print(f"\n[ERROR] [VLC] {e}")
             import traceback
             traceback.print_exc()
             return
@@ -201,7 +201,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 break
             time.sleep(1)
         else:
-            print(f"⚠️  [VLC] Stream not responding after 10s — continuing anyway")
+            print(f"[WARN] [VLC] Stream not responding after 10s — continuing anyway")
 
     # [QA-P0-1] Live sources (RTSP / HTTP / VLC) use a background reader
     # that keeps only the newest frame → no buffer build-up / lag / smear.
@@ -224,13 +224,13 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
     print(f"[{source_id[-30:]}] Connected | location={location or '?'} | cam_id={cam_id or 'default'}")
 
-    tracker = SimpleTracker(frame_w=W, frame_h=H, max_lost=TRACKER_MAX_LOST)  # [F1]
+    tracker = HungarianTracker(frame_w=W, frame_h=H, max_lost=TRACKER_MAX_LOST)
     fall_d  =FallDetector(cfg.get("fall",{}))
     hand_d  =HandSOSDetector(cfg.get("hand_sos",{}))
     head_d  =HandsOverHeadDetector(cfg.get("hands_over_head",{}))
     obj_grd =ObjectGuardian({**cfg.get("object_guardian",{}), "alert_dir":"alerts"})
     active_cam_id = cam_id or location or "default"
-    zones   =ZoneManager(str(ROOT / "config/zones.yaml"), cam_id=active_cam_id, db=db_module)
+    zones   =ZoneManager(cam_id=active_cam_id, db=db_module)
     viz     =Visualizer()
     spatial_dedup = SpatialAlertDeduplicator(radius_norm=0.12, default_cooldown_sec=30.0)
 
@@ -262,7 +262,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
     webhook_url = os.getenv("HELP_WEBHOOK_URL")
     if not webhook_url:
-        print("⚠️  HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
+        print("[WARN] HELP_WEBHOOK_URL ไม่ได้ตั้งค่า — help request จะไม่ทำงาน")
 
     # [FIX] db= was missing → help_requests collection stayed empty forever
     help_disp = HelpRequestDispatcher(webhook_url=webhook_url or "", db=db_module)
@@ -291,20 +291,24 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     hand_consec3: dict[int, int] = {}
     MIN_CONSEC3 = max(1, int(hand_cfg.get("min_consec_sos_frames", 1)))
     hand_state1_time: dict[int, float] = {}
-    GRACE_FRAMES = 5
+    GRACE_FRAMES = 8
 
     hand_ev={}; hand_bc={}; hand_bf={}; hand_bt={}
     _hand_last_event_ts: dict[int, float] = {}  # per-tid: cooldown timestamp
     _pose_last_event_ts: dict[int, float] = {}  # per-tid: cooldown timestamp
     hand_step_time: dict[int, float] = {}       # per-tid: step transition timestamp
-    pose_cooldown_seconds = max(0.0, float(cfg.get("hands_over_head", {}).get("cooldown_seconds", alert_cd)))
+    pose_cooldown_seconds = max(0.0, float(cfg.get("hands_over_head", {}).get("cooldown_seconds", 30)))
     fall_ev={}; fall_bc={}; fall_bf={}; fall_bt={}
     _fall_last_event_ts = {}  # per-tid: timestamp of last confirmed fall alert
     FALL_HYSTERESIS_FACTOR = cfg.get("fall", {}).get("fall_hysteresis_factor", 2.0)
     FALL_CONFIRM_S = cfg.get("fall", {}).get("confirm_seconds", 4.0)
-    # [QA-P0-5] dedup window was only confirm_s*2 (=8s) → re-alerted every ~8s
-    # while a person lay still with a flickering is_fallen. Honor cooldown.
-    FALL_COOLDOWN_S = float(cfg.get("fall", {}).get("cooldown_seconds", 120))
+    FALL_COOLDOWN_S = float(cfg.get("fall", {}).get("cooldown_seconds", 60))
+    FALL_DISPATCH_DELAY = float(cfg.get("fall", {}).get("dispatch_delay_seconds", 10.0))
+    UNKNOWN_GRACE_S = float(cfg.get("fall", {}).get("unknown_grace_seconds", 12.0))
+    fall_first_down_ts = {}
+    active_fall_alerts = {}
+    lost_fall_alerts: list[dict] = []
+    fall_stand_count = {}
     FALL_DEBUG_CSV = os.getenv("FALL_DEBUG_CSV", "").lower() in ("1", "true", "yes")
     _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     last_stats_ts = time.time(); frames_done = 0
@@ -322,13 +326,26 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 if not ret:
                     retry_count += 1
                     print(f" [{source_id[-30:]}] No frame for 5s (stall {retry_count}/{max_retries}) — reader is reconnecting")
+                    if retry_count >= 2 and db_module:
+                        for _af in list(active_fall_alerts.values()) + lost_fall_alerts:
+                            if not _af.get("recovered") and not _af.get("unknown_marked") and _af.get("uuid"):
+                                _af["unknown_marked"] = True
+                                try:
+                                    db_module.mark_incident_unknown(
+                                        _af["uuid"],
+                                        reason="UNKNOWN_SIGNAL_LOST",
+                                        notes=f"Camera stream interrupted or signal degraded during active fall incident (stall={retry_count*5}s)",
+                                    )
+                                    print(f"  [UNKNOWN] Incident {_af['uuid'][:8]} marked Unknown (UNKNOWN_SIGNAL_LOST)")
+                                except Exception as _e:
+                                    print(f"[DB] mark_incident_unknown error: {_e}")
                     if vlc_mgr and not vlc_mgr.is_alive():
                         print(" [VLC] Process died — restarting ...")
                         try:
                             url = vlc_mgr.restart()
                             reader.reopen(url)
                         except Exception as restart_err:
-                            print(f"❌ [VLC] Restart failed: {restart_err}")
+                            print(f"[ERROR] [VLC] Restart failed: {restart_err}")
                     if retry_count > max_retries:
                         print(f" [{source_id[-30:]}] Max retries ({max_retries}) reached — exiting")
                         break
@@ -407,6 +424,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
 
             # ── People tracking ──────────────────────────────────────────
             if pdets:
+                pdets = nms_containment(pdets)
                 assigned=tracker.update(pdets)
                 boxes=BoxesWrapper([d["bbox"] for d in assigned],
                                    [d.get("conf",0.0) for d in assigned],
@@ -422,6 +440,8 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
             else:
                 assigned=[]
                 boxes=None; kpts=None; posture_by_idx=[]
+
+            zones.update_auto_furniture(odets, w, h)
 
             # ── Object Guardian (Gated by DB signal_config) ──────────────
             if obj_active:
@@ -460,10 +480,39 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
             # cleanup ยึด grace period เดียวกับที่ tracker ใช้จริง
             if boxes and boxes.id:
                 alive = set(tracker.tracks.keys())
-                dropped = (set(hand_states.keys()) | set(head_d._since.keys())) - alive
+                known_tracks = (
+                    set(fall_d._was_upright.keys())
+                    | set(fall_d._since.keys())
+                    | set(fall_d._hist.keys())
+                    | set(hand_states.keys())
+                    | set(head_d._since.keys())
+                    | set(active_fall_alerts.keys())
+                    | set(fall_ev.keys())
+                )
+                dropped = known_tracks - alive
                 for tid in dropped:
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
                     head_d.cleanup_track(tid)
+                    # Post-alert departure / lost subject check (Action Plan)
+                    if tid in active_fall_alerts:
+                        af = active_fall_alerts.pop(tid)
+                        if af.get("recovered") and db_module and af.get("uuid"):
+                            try:
+                                db_module.update_incident_notes(
+                                    af["uuid"],
+                                    notes=f"Subject recovered and safely departed the scene at t={frame_ts:.1f}s",
+                                    extra_meta={"post_event_status": "RECOVERED_AND_DEPARTED"}
+                                )
+                                print(f"  [ACTION] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
+                            except Exception:
+                                pass
+                        elif not af.get("recovered") and not af.get("unknown_marked") and af.get("uuid"):
+                            af["lost_ts"] = frame_ts
+                            af["old_tid"] = tid
+                            lost_fall_alerts.append(af)
+                            print(f"  [WARN] tid={tid} lost while fallen at t={frame_ts:.1f}s — holding in re-link buffer (uuid={af['uuid'][:8]})")
+                    fall_first_down_ts.pop(tid, None)
+                    fall_stand_count.pop(tid, None)
                     for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
                           hand_bt, fall_bc, fall_bf, fall_bt, hand_first_seen, hand_consec3,
                           _hand_last_event_ts, _pose_last_event_ts, hand_step_time]:
@@ -478,6 +527,7 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     }
                     for j in range(len(boxes.xyxy))
                 ]
+                all_bboxes = [t["bbox"] for t in all_frame_tracks]
                 for i in range(len(boxes.xyxy)):
                     bbox=boxes.xyxy[i].cpu().numpy().tolist()
                     conf=float(boxes.conf[i].cpu())
@@ -488,14 +538,15 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     cx, cy = (x1+x2)/2/max(1, w), (y1+y2)/2/max(1, h)
                     if not zones.in_zone(cx, cy): continue
 
-                    # ── Fall Detection (Zone-gated & DB Signal-Config gated) ──
+                    # ── Fall Detection (Zone-gated, Auto-Furniture, & Stage-2 FallSceneVerifier) ──
                     posture_class, posture_conf = posture_by_idx[i] if i < len(posture_by_idx) else (None, 0.0)
                     in_fall_zone = zones.in_zone(cx, cy, detector_type="fall")
                     if fall_active and in_fall_zone:
                         fr=fall_d.process(tid,kp,bbox,h,w,
                                            posture_class=posture_class,
                                            posture_conf=posture_conf,  # [F2]
-                                           timestamp=frame_ts)          # [QA-P0-4]
+                                           timestamp=frame_ts,          # [QA-P0-4]
+                                           on_furniture=bool(zones.furniture_at(kp, bbox, w, h)))
                     else:
                         fr={"is_fallen":False, "danger_lying":False, "is_critical":False}
 
@@ -531,6 +582,65 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         dt = max(1e-3, now_t - prev_c_info[2])
                         vel_px_s = (((cx - prev_c_info[0])**2 + (cy - prev_c_info[1])**2)**0.5) / dt
 
+                    # Spatial Re-Link: if camera stuttered/occluded and subject reappeared with new tid
+                    if tid not in active_fall_alerts and lost_fall_alerts:
+                        for idx_laf, laf in enumerate(lost_fall_alerts):
+                            dist_laf = ((cx - laf.get("last_cx", -1.0))**2 + (cy - laf.get("last_cy", -1.0))**2) ** 0.5
+                            if dist_laf <= 0.18:
+                                active_fall_alerts[tid] = laf
+                                fall_ev[tid] = True
+                                _fall_last_event_ts[tid] = now_t
+                                lost_fall_alerts.pop(idx_laf)
+                                print(f"  [RE-LINK] Re-linked lost fall incident {laf['uuid'][:8]} from tid={laf.get('old_tid')} -> tid={tid} (dist={dist_laf:.3f})")
+                                break
+
+                    # Post-Alert Recovery & Stood-Up Tracking (Action Plan)
+                    if tid in active_fall_alerts:
+                        af = active_fall_alerts[tid]
+                        af["last_bbox"] = bbox
+                        af["last_cx"] = cx
+                        af["last_cy"] = cy
+                        af["last_seen_ts"] = now_t
+                        af["last_frame"] = clean_frame.copy()
+                        is_standing_now = (not fr.get("is_down") and not fr.get("is_fallen") and (float(fr.get("spine_angle", 0) or 0) >= 50.0 or fr.get("is_sitting") or fr.get("is_crouching")))
+                        if is_standing_now:
+                            fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
+                            if fall_stand_count[tid] >= 3 and not af.get("recovered"):
+                                af["recovered"] = True
+                                print(f"  [RECOVERY] tid={tid} stood up & recovered at {now_t:.1f}s!")
+                                rec_b64, rec_file = save_annotated_snapshot(
+                                    clean_frame,
+                                    event_type="recovery",
+                                    bbox=bbox,
+                                    label=f"RECOVERED [tid={tid}] Stood Up {fr.get('spine_angle', 0.0):.0f}deg",
+                                    color=(0, 200, 0),
+                                    coord_size=(w, h),
+                                    snapshot_dir=snapshot_dir,
+                                    save_local=save_local_snapshots,
+                                    extra_meta={
+                                        "source_id": source_id,
+                                        "track_id": tid,
+                                        "event_uuid": af.get("uuid"),
+                                        "status": "RECOVERED_STAND_UP",
+                                    },
+                                    all_tracks=None,
+                                )
+                                if db_module and af.get("uuid"):
+                                    try:
+                                        db_module.resolve_incident(
+                                            af["uuid"],
+                                            resolved_by="auto_recovery",
+                                            notes=f"Subject recovered and stood up at t={now_t:.1f}s (upright angle={fr.get('spine_angle')}deg)",
+                                            post_event_status="RECOVERED_STAND_UP",
+                                            recovery_snapshot_url=rec_b64,
+                                            recovery_image_path=rec_file,
+                                        )
+                                        print(f"  [RECOVERY PROOF] Saved snapshot proof for {af['uuid'][:8]} -> {rec_file or 'base64'}")
+                                    except Exception as e:
+                                        print(f"[DB] resolve_incident error: {e}")
+                        else:
+                            fall_stand_count[tid] = 0
+
                     both_overhead = _are_both_arms_over_head(kp)
                     is_lying = (
                         posture_class == "laying" or
@@ -542,6 +652,15 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                     recently_fallen = (now_t - _fall_last_event_ts.get(tid, -1e9)) < 25.0
                     # Suppress if moving rapidly (running > 0.45 frame_h/s, not normal stepping/gesturing)
                     is_moving_fast = (vel_px_s / max(1.0, float(h))) > 0.45
+
+                    # ── Distance-Adaptive Scale & Pose SOS Processing ────
+                    bbox_h = max(0.0, float(bbox[3] - bbox[1]))
+                    is_distant = bool(bbox_h < 350.0)
+
+                    in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
+                    head_res = {}
+                    if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
+                        head_res = head_d.process(tid, kp, h, w, timestamp=now_t)
 
                     # Suppress Hand SOS if disabled by signal_config, both arms overhead (Pose SOS), fallen, lying, or moving fast
                     if (not hand_active) or both_overhead or fall_ev.get(tid) or is_lying or recently_fallen or is_moving_fast:
@@ -591,10 +710,12 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         is_fist_now = bool(hdet and hs == 3 and not hand_d._palm_open(hl) and hand_d._fingers_closed(hl))
                         if is_fist_now:
                             hand_consec3[tid] = hand_consec3.get(tid, 0) + 1
-                        else:
+                        elif hdet:
+                            # Only reset if hand is actually detected but is not a fist (e.g. open palm)
                             hand_consec3[tid] = 0
+                        # If not hdet, keep hand_consec3 (grace for distance flicker)
                         consec_ok = hand_consec3.get(tid, 0) >= MIN_CONSEC3
-                        is_sos_frame = bool(hdet and hs == 3 and hand_eligible and consec_ok)
+                        is_sos_frame = bool(hs == 3 and hand_eligible and consec_ok)
                         recent_sos = hand_recent_sos[tid]
                         recent_sos.append(is_sos_frame)
                         sos_hits = sum(1 for ok in recent_sos if ok)
@@ -604,54 +725,90 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         )
                         sos_confirmed = temporal_confirmed
 
+                        # ── Multi-Modal Hand SOS Dispatch ──
                         if sos_confirmed and not fall_ev.get(tid) and not is_lying and not recently_fallen:
                             can_emit = (now_t - _hand_last_event_ts.get(tid, -1e9)) >= hand_cooldown_seconds
-                            if can_emit and not hand_ev.get(tid):
-                                # Generate Base64 snapshot and save local image/JSON metadata/log
+                            is_spatial_hand_dup = spatial_dedup.should_suppress("hand_sos", cx, cy, now_t, cooldown_sec=hand_cooldown_seconds)
+                            if can_emit and not hand_ev.get(tid) and not is_spatial_hand_dup:
+                                is_pose_fused = bool(
+                                    head_res.get("time_held", 0.0) >= 1.0 or
+                                    (now_t - _pose_last_event_ts.get(tid, -1e9)) < 10.0
+                                )
+                                ev_type = "critical_sos" if is_pose_fused else "hand_sos"
+                                ev_label = f"CRITICAL SOS [tid={tid}] Hand+Pose Multi-Modal" if is_pose_fused else f"HAND SOS [tid={tid}]"
+                                ev_color = (0, 0, 255) if is_pose_fused else (0, 255, 0)
+                                ev_sev = "Critical" if is_pose_fused else "Medium"
+                                ev_sev_int = 3 if is_pose_fused else 1
+                                ev_conf = max(conf, 0.98 if is_pose_fused else 0.90)
+
                                 b64_snap, snap_file = save_annotated_snapshot(
                                     clean_frame,
-                                    event_type="hand_sos",
+                                    event_type=ev_type,
                                     bbox=bbox,
-                                    label=f"HAND SOS [tid={tid}]",
-                                    color=(0, 255, 0),
+                                    label=ev_label,
+                                    color=ev_color,
                                     coord_size=(w, h),
                                     snapshot_dir=snapshot_dir,
                                     save_local=save_local_snapshots,
                                     extra_meta={
                                         "source_id": source_id,
                                         "track_id": tid,
-                                        "confidence": conf,
+                                        "confidence": ev_conf,
                                         "location": location,
+                                        "is_multi_modal": is_pose_fused,
                                     },
-                                    all_tracks=all_frame_tracks,
+                                    all_tracks=None,
+                                    status_code=500 if is_pose_fused else 200,
                                 )
                                 raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+                                ev_uuid = str(uuid.uuid4())
+                                iso_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                                 try:
-                                    ev_uuid = str(uuid.uuid4())
                                     insert_incident(
                                         event_uuid     = ev_uuid,
                                         detection_type = "Gesture",
                                         zone           = location,
-                                        confidence     = conf,
-                                        timestamp      = datetime.utcnow().isoformat(),
-                                        severity       = "High",
+                                        confidence     = ev_conf,
+                                        timestamp      = iso_ts,
+                                        severity       = ev_sev,
                                         metadata       = {
-                                            "source_id":       source_id,
-                                            "track_id":        tid,
-                                            "snapshotUrl":     b64_snap,
-                                            "snapshot_base64": raw_b64,
-                                            "imagePath":       snap_file or b64_snap,
-                                            "snapshot_file":   snap_file,
-                                            "gesture":         "hand_sos",
-                                            "bbox":            [int(v) for v in bbox],
-                                            "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
-                                            "frame_size":      [w, h],
+                                            "source_id":        source_id,
+                                            "track_id":         tid,
+                                            "originalSeverity": ev_sev_int,
+                                            "severity_name":    ev_sev.upper(),
+                                            "snapshotUrl":      b64_snap,
+                                            "snapshot_base64":  raw_b64,
+                                            "imagePath":        snap_file or b64_snap,
+                                            "snapshot_file":    snap_file,
+                                            "gesture":          ev_type,
+                                            "fused_signals":    ["hand_sos", "pose_sos"] if is_pose_fused else ["hand_sos"],
+                                            "bbox":             [int(v) for v in bbox],
+                                            "bbox_norm":        [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                            "frame_size":       [w, h],
                                         },
                                     )
-                                    print(f"  [DB INSERTED] Hand SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
+                                    print(f"  [DB INSERTED] {ev_label} uuid={ev_uuid} | file={snap_file or 'base64'}")
                                 except Exception as e:
-                                    print(f"[DB] hand_sos insert error: {e}")
+                                    print(f"[DB] {ev_type} insert error: {e}")
+                                if help_disp and help_disp.should_send_help_request(ev_type, ev_sev_int):
+                                    try:
+                                        help_disp.dispatch_help_request(
+                                            event_uuid=ev_uuid,
+                                            event_type=ev_type,
+                                            severity=ev_sev_int,
+                                            severity_name=ev_sev.upper(),
+                                            location=location or "unknown",
+                                            source_id=source_id,
+                                            track_id=tid,
+                                            image_path=snap_file or b64_snap,
+                                            frame=clean_frame,
+                                            extra={"confidence": ev_conf, "gesture": ev_type, "is_multi_modal": is_pose_fused},
+                                        )
+                                    except Exception as e:
+                                        print(f"[Webhook] {ev_type} help request error: {e}")
                                 _hand_last_event_ts[tid] = now_t
+                                if is_pose_fused:
+                                    _pose_last_event_ts[tid] = now_t  # Suppress duplicate pose alert
                                 hand_states[tid] = 0
                                 hand_consec3[tid] = 0
                                 hand_recent_sos[tid].clear()
@@ -660,59 +817,95 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             if not sos_confirmed:
                                 hand_ev[tid] = False
 
-                    # ── Hands Over Head SOS (Pose SOS) ───────────────────
-                    in_pose_zone = zones.in_zone(cx, cy, detector_type="pose_sos")
+                    # ── Multi-Modal Pose SOS Dispatch (Option 1: Triangle / Option 2: Hands Up) ──
                     if pose_active and in_pose_zone and not fall_ev.get(tid) and not (fr.get("is_fallen") or fr.get("danger_lying")):
-                        head_res = head_d.process(tid, kp, h, w, timestamp=now_t)
                         can_emit_pose = (now_t - _pose_last_event_ts.get(tid, -1e9)) >= pose_cooldown_seconds
                         is_spatial_pose_dup = spatial_dedup.should_suppress("pose_sos", cx, cy, now_t, cooldown_sec=pose_cooldown_seconds)
-                        if head_res.get("triggered") and can_emit_pose and not is_spatial_pose_dup:
+                        hand_recently_emitted = (now_t - _hand_last_event_ts.get(tid, -1e9)) < 10.0
+                        if head_res.get("triggered") and can_emit_pose and not is_spatial_pose_dup and not hand_recently_emitted:
+                            is_hand_co_active = bool(hs >= 1 or hand_consec3.get(tid, 0) >= 1)
+                            held_s = head_res.get('time_held', 0.0)
+                            g_opt = head_res.get('gesture_option', 'hands_overhead_v')
+                            g_name = "Triangle Overhead" if g_opt == "triangle_overhead" else "Hands Overhead (V)"
+                            ev_label = f"GESTURE SOS [tid={tid}] {g_name} Multi-Modal held={held_s:.1f}s" if is_hand_co_active else f"GESTURE SOS [tid={tid}] {g_name} held={held_s:.1f}s"
+                            ev_color = (0, 0, 255) if is_hand_co_active else (0, 165, 255)
+                            ev_sev = "Critical" if is_hand_co_active else "Medium"
+                            ev_sev_int = 3 if is_hand_co_active else 1
+                            ev_conf = head_res.get("event_confidence") or (0.98 if is_hand_co_active else 0.90)
+
                             b64_snap, snap_file = save_annotated_snapshot(
                                 clean_frame,
-                                event_type="pose_sos",
+                                event_type="gesture",
                                 bbox=bbox,
-                                label=f"POSE SOS [tid={tid}] held={head_res.get('time_held', 0.0):.1f}s",
-                                color=(0, 165, 255),
+                                label=ev_label,
+                                color=ev_color,
                                 coord_size=(w, h),
                                 snapshot_dir=snapshot_dir,
                                 save_local=save_local_snapshots,
                                 extra_meta={
                                     "source_id": source_id,
                                     "track_id": tid,
-                                    "confidence": conf,
+                                    "confidence": ev_conf,
+                                    "person_confidence": conf,
                                     "location": location,
-                                    "time_held": head_res.get("time_held", 0.0),
+                                    "time_held": held_s,
+                                    "gesture_option": g_opt,
+                                    "is_multi_modal": is_hand_co_active,
                                 },
-                                all_tracks=all_frame_tracks,
+                                all_tracks=None,
+                                status_code=500 if is_hand_co_active else 200,
                             )
                             raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+                            ev_uuid = str(uuid.uuid4())
+                            iso_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                             try:
-                                ev_uuid = str(uuid.uuid4())
                                 insert_incident(
                                     event_uuid     = ev_uuid,
                                     detection_type = "Gesture",
                                     zone           = location,
-                                    confidence     = conf,
-                                    timestamp      = datetime.utcnow().isoformat(),
-                                    severity       = "High",
+                                    confidence     = ev_conf,
+                                    timestamp      = iso_ts,
+                                    severity       = ev_sev,
                                     metadata       = {
-                                        "source_id":       source_id,
-                                        "track_id":        tid,
-                                        "snapshotUrl":     b64_snap,
-                                        "snapshot_base64": raw_b64,
-                                        "imagePath":       snap_file or b64_snap,
-                                        "snapshot_file":   snap_file,
-                                        "gesture":         "pose_sos",
-                                        "time_held":       head_res.get("time_held", 0.0),
-                                        "bbox":            [int(v) for v in bbox],
-                                        "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
-                                        "frame_size":      [w, h],
+                                        "source_id":         source_id,
+                                        "track_id":          tid,
+                                        "originalSeverity":  ev_sev_int,
+                                        "severity_name":     ev_sev.upper(),
+                                        "person_confidence": conf,
+                                        "snapshotUrl":       b64_snap,
+                                        "snapshot_base64":   raw_b64,
+                                        "imagePath":         snap_file or b64_snap,
+                                        "snapshot_file":     snap_file,
+                                        "gesture":           g_opt,
+                                        "fused_signals":     ["pose_sos", "hand_sos"] if is_hand_co_active else ["pose_sos"],
+                                        "time_held":         held_s,
+                                        "bbox":              [int(v) for v in bbox],
+                                        "bbox_norm":         [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                        "frame_size":        [w, h],
                                     },
                                 )
-                                print(f"  [DB INSERTED] Pose SOS uuid={ev_uuid} | file={snap_file or 'base64'}")
+                                print(f"  [DB INSERTED] {ev_label} uuid={ev_uuid} | file={snap_file or 'base64'} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
                             except Exception as e:
-                                print(f"[DB] pose_sos insert error: {e}")
+                                print(f"[DB] gesture insert error: {e}")
+                            if help_disp and help_disp.should_send_help_request("pose_sos", ev_sev_int):
+                                try:
+                                    help_disp.dispatch_help_request(
+                                        event_uuid=ev_uuid,
+                                        event_type="pose_sos",
+                                        severity=ev_sev_int,
+                                        severity_name=ev_sev.upper(),
+                                        location=location or "unknown",
+                                        source_id=source_id,
+                                        track_id=tid,
+                                        image_path=snap_file or b64_snap,
+                                        frame=clean_frame,
+                                        extra={"confidence": ev_conf, "gesture": g_opt, "time_held": held_s, "is_multi_modal": is_hand_co_active},
+                                    )
+                                except Exception as e:
+                                    print(f"[Webhook] pose_sos help request error: {e}")
                             _pose_last_event_ts[tid] = now_t
+                            if is_hand_co_active:
+                                _hand_last_event_ts[tid] = now_t
 
                     # ── Fall CSV ─────────────────────────────────────────
                     if not fr.get("recovered_quickly"):
@@ -746,90 +939,191 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                          f"{fr.get('time_lying')},{int(fr.get('danger_lying',0))}\n")
                           except Exception: pass
 
-                    # ── Critical Fall & Confirmed Fall ────────────────────
-                    esc=fr.get("danger_lying") and not fr.get("recovered_quickly")
-                    is_critical=fr.get("is_critical") and not fr.get("recovered_quickly")
-                    is_confirmed=(fr.get("is_fallen") or esc) and not fr.get("recovered_quickly")
+                    # ── Critical Fall & Confirmed Fall (Stage-2 FallSceneVerifier) ──
+                    scene_verified = FallSceneVerifier.verify_fall_candidate(tid, fr, kp, bbox, all_bboxes, w, h)
+                    esc=fr.get("danger_lying") and not fr.get("recovered_quickly") and scene_verified
+                    is_critical=fr.get("is_critical") and not fr.get("recovered_quickly") and scene_verified
+                    is_confirmed=(fr.get("is_fallen") or esc) and not fr.get("recovered_quickly") and scene_verified
+                    is_down = fr.get("is_down", False)
 
+                    # Fall 10-second timeline (4s detect + 5s recovery window = 10s alert)
                     if fall_active and (is_critical or is_confirmed):
-                        # ── Flapping dedup (hysteresis) ──
-                        # If this tid had a fall alert recently (within
-                        # confirm_seconds * hysteresis_factor), treat it as
-                        # the SAME event — don't dispatch a new alert.
-                        prev_ts = _fall_last_event_ts.get(tid)
-                        dedup_window = max(FALL_CONFIRM_S * FALL_HYSTERESIS_FACTOR, FALL_COOLDOWN_S)
-                        is_flap = bool(
-                            prev_ts is not None
-                            and (now_t - prev_ts) < dedup_window
-                        )
-                        is_spatial_dup = spatial_dedup.should_suppress("fall", cx, cy, now_t, cooldown_sec=dedup_window)
+                        fall_stand_count[tid] = 0
+                        if tid not in fall_first_down_ts:
+                            fall_first_down_ts[tid] = fr.get("ground_time") or (now_t - 4.0)
 
-                        if is_flap or is_spatial_dup:
-                            logger.debug(
-                                "[FALL-DEDUP] tid=%d: suppressed flapping/spatial duplicate alert "
-                                "(is_flap=%s, is_spatial=%s)",
-                                tid, is_flap, is_spatial_dup,
-                            )
-                            # Keep fall_ev[tid]=True so we don't re-trigger
-                            fall_ev[tid] = True
-                        elif not fall_ev.get(tid):
-                            fall_bc[tid] = conf; fall_bt[tid] = now_time
-                            ex = {
-                                "track_id": tid, "source": source_id, "location": location,
-                                "recovered_quickly": fr.get("recovered_quickly"), "fall_result": fr
-                            }
-                            if is_critical: ex["critical"] = True
-                            if esc: ex["auto_escalated_immobile"] = True
-                            lv, ln, flags = disp._assess_alert_level("fall", ex)
+                        time_down_total = max(now_t - fall_first_down_ts[tid], (fr.get("time_lying") or 0.0) + 4.0)
+                        should_dispatch_fall = (time_down_total >= FALL_DISPATCH_DELAY) or is_critical
 
-                            b64_snap, snap_file = save_annotated_snapshot(
-                                clean_frame,
-                                event_type="fall",
-                                bbox=bbox,
-                                label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg",
-                                color=(0, 0, 255),
-                                coord_size=(w, h),
-                                snapshot_dir=snapshot_dir,
-                                save_local=save_local_snapshots,
-                                extra_meta={
-                                    **ex,
-                                    "severity_name": ln,
-                                    "confidence": conf,
-                                },
-                                all_tracks=all_frame_tracks,
+                        if should_dispatch_fall:
+                            prev_ts = _fall_last_event_ts.get(tid)
+                            dedup_window = max(FALL_CONFIRM_S * FALL_HYSTERESIS_FACTOR, FALL_COOLDOWN_S)
+                            is_flap = bool(
+                                prev_ts is not None
+                                and (now_t - prev_ts) < dedup_window
                             )
-                            raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
-                            try:
-                                ev_uuid = str(uuid.uuid4())
-                                insert_incident(
-                                    event_uuid     = ev_uuid,
-                                    detection_type = "Fall",
-                                    zone           = location,
-                                    confidence     = conf,
-                                    timestamp      = now_time,
-                                    severity       = lv,
-                                    metadata       = {
-                                        **ex,
-                                        "severity_name":   ln,
-                                        "source_id":       source_id,
-                                        "track_id":        tid,
-                                        "snapshotUrl":     b64_snap,
-                                        "snapshot_base64": raw_b64,
-                                        "imagePath":       snap_file or b64_snap,
-                                        "snapshot_file":   snap_file,
-                                        "bbox":            [int(v) for v in bbox],
-                                        "bbox_norm":       [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
-                                        "frame_size":      [w, h],
-                                    }
+                            is_spatial_dup = spatial_dedup.should_suppress("fall", cx, cy, now_t, cooldown_sec=dedup_window)
+
+                            if is_flap or is_spatial_dup:
+                                logger.debug(
+                                    "[FALL-DEDUP] tid=%d: suppressed flapping/spatial duplicate alert "
+                                    "(is_flap=%s, is_spatial=%s)",
+                                    tid, is_flap, is_spatial_dup,
                                 )
-                                print(f"  [DB INSERTED] Fall uuid={ev_uuid} | file={snap_file or 'base64'}")
-                            except Exception as e:
-                                print(f"[DB] fall insert error: {e}")
-                            _fall_last_event_ts[tid] = now_t
-                            fall_ev[tid] = True
+                                fall_ev[tid] = True
+                            elif not fall_ev.get(tid):
+                                fall_bc[tid] = conf; fall_bt[tid] = now_time
+                                event_conf = fr.get("event_confidence") or (0.95 if is_critical else 0.88)
+                                ex = {
+                                    "track_id": tid, "source": source_id, "location": location,
+                                    "recovered_quickly": fr.get("recovered_quickly"), "fall_result": fr,
+                                    "flags": flags if 'flags' in locals() else []
+                                }
+                                if is_critical: ex["critical"] = True
+                                if esc: ex["auto_escalated_immobile"] = True
+                                lv, ln, flags = disp._assess_alert_level("fall", ex)
+                                ex["flags"] = flags
+                                _sev_map = {0: "Low", 1: "Medium", 2: "High", 3: "Critical"}
+                                sev_str = _sev_map.get(int(lv), "High")
+
+                                b64_snap, snap_file = save_annotated_snapshot(
+                                    clean_frame,
+                                    event_type="fall",
+                                    bbox=bbox,
+                                    label=f"FALL [tid={tid}] {fr.get('spine_angle', 0.0):.0f}deg down={time_down_total:.1f}s",
+                                    color=(0, 0, 255),
+                                    coord_size=(w, h),
+                                    snapshot_dir=snapshot_dir,
+                                    save_local=save_local_snapshots,
+                                    extra_meta={
+                                        **ex,
+                                        "severity_name": ln,
+                                        "confidence": event_conf,
+                                        "person_confidence": conf,
+                                    },
+                                    all_tracks=None,
+                                )
+                                raw_b64 = b64_snap.split(",", 1)[1] if "," in b64_snap else b64_snap
+                                ev_uuid = str(uuid.uuid4())
+                                iso_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                                try:
+                                    insert_incident(
+                                        event_uuid     = ev_uuid,
+                                        detection_type = "Fall",
+                                        zone           = location,
+                                        confidence     = event_conf,
+                                        timestamp      = iso_ts,
+                                        severity       = sev_str,
+                                        metadata       = {
+                                            **ex,
+                                            "originalSeverity":  int(lv),
+                                            "severity_name":     ln,
+                                            "source_id":         source_id,
+                                            "track_id":          tid,
+                                            "person_confidence": conf,
+                                            "snapshotUrl":       b64_snap,
+                                            "snapshot_base64":   raw_b64,
+                                            "imagePath":         snap_file or b64_snap,
+                                            "snapshot_file":     snap_file,
+                                            "bbox":              [int(v) for v in bbox],
+                                            "bbox_norm":         [round(bbox[0]/w, 4), round(bbox[1]/h, 4), round(bbox[2]/w, 4), round(bbox[3]/h, 4)],
+                                            "frame_size":        [w, h],
+                                        }
+                                    )
+                                    print(f"  [DB INSERTED] Fall uuid={ev_uuid} | severity={sev_str} ({ln}) | file={snap_file or 'base64'} (Event Conf: {event_conf:.2f}, Person Conf: {conf:.2f})")
+                                except Exception as e:
+                                    print(f"[DB] fall insert error: {e}")
+                                if help_disp and help_disp.should_send_help_request("fall", max(2, int(lv))):
+                                    try:
+                                        help_disp.dispatch_help_request(
+                                            event_uuid=ev_uuid,
+                                            event_type="fall",
+                                            severity=max(2, int(lv)),
+                                            severity_name=ln,
+                                            location=location or "unknown",
+                                            source_id=source_id,
+                                            track_id=tid,
+                                            image_path=snap_file or b64_snap,
+                                            frame=clean_frame,
+                                            extra=ex,
+                                        )
+                                    except Exception as e:
+                                        print(f"[Webhook] fall help request error: {e}")
+                                _fall_last_event_ts[tid] = now_t
+                                fall_ev[tid] = True
+                                active_fall_alerts[tid] = {
+                                    "uuid": ev_uuid,
+                                    "alert_ts": now_t,
+                                    "recovered": False,
+                                    "last_bbox": bbox,
+                                    "last_cx": cx,
+                                    "last_cy": cy,
+                                    "last_seen_ts": now_t,
+                                    "last_frame": clean_frame.copy(),
+                                }
                     else:
-                        if fall_ev.get(tid):
+                        # Recovery suppression within window (requires >=2 consecutive frames of upright standing or sitting)
+                        is_recovery_stand = bool(
+                            fr.get("recovered_quickly")
+                            or fr.get("is_sitting")
+                            or (not is_down and not fr.get("is_fallen") and float(fr.get("spine_angle", 0) or 0) >= 60.0)
+                        )
+                        if is_recovery_stand:
+                            rec_c = fall_stand_count.get(tid, 0) + 1
+                            fall_stand_count[tid] = rec_c
+                            if rec_c >= 2 or fr.get("is_seated_resting"):
+                                if tid in fall_first_down_ts and (now_t - fall_first_down_ts[tid]) < FALL_DISPATCH_DELAY:
+                                    print(f"  [INFO] [{now_t:.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
+                                fall_first_down_ts.pop(tid, None)
+                        if fall_ev.get(tid) and not fr.get("is_fallen"):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
+                        if fr.get("is_seated_resting"):
+                            fall_first_down_ts.pop(tid, None)
+
+            # Check lost fall alerts that exceeded UNKNOWN_GRACE_S without re-linking
+            if lost_fall_alerts:
+                still_lost = []
+                for laf in lost_fall_alerts:
+                    if (frame_ts - laf.get("lost_ts", frame_ts)) >= UNKNOWN_GRACE_S:
+                        if not laf.get("unknown_marked"):
+                            laf["unknown_marked"] = True
+                            last_b64, last_file = "", None
+                            if laf.get("last_frame") is not None:
+                                last_b64, last_file = save_annotated_snapshot(
+                                    laf["last_frame"],
+                                    event_type="unknown",
+                                    bbox=laf.get("last_bbox"),
+                                    label=f"UNKNOWN [tid={laf.get('old_tid')}] Subject Lost @ {laf.get('last_seen_ts', frame_ts):.1f}s",
+                                    color=(0, 165, 255),
+                                    coord_size=(w, h),
+                                    snapshot_dir=snapshot_dir,
+                                    save_local=save_local_snapshots,
+                                    extra_meta={
+                                        "source_id": source_id,
+                                        "track_id": laf.get("old_tid"),
+                                        "event_uuid": laf.get("uuid"),
+                                        "status": "UNKNOWN_SUBJECT_LOST",
+                                    },
+                                    all_tracks=None,
+                                )
+                            if db_module and laf.get("uuid"):
+                                try:
+                                    db_module.mark_incident_unknown(
+                                        laf["uuid"],
+                                        reason="UNKNOWN_SUBJECT_LOST",
+                                        notes=(
+                                            f"Subject (tid={laf.get('old_tid')}) disappeared from camera view or was occluded "
+                                            f"at t={laf.get('last_seen_ts', frame_ts):.1f}s without confirmed standing recovery."
+                                        ),
+                                        last_seen_snapshot_url=last_b64,
+                                        last_seen_image_path=last_file,
+                                    )
+                                    print(f"  [UNKNOWN] Incident {laf['uuid'][:8]} marked Unknown (UNKNOWN_SUBJECT_LOST)")
+                                except Exception as e:
+                                    print(f"[DB] mark_incident_unknown error: {e}")
+                    else:
+                        still_lost.append(laf)
+                lost_fall_alerts = still_lost
 
             zones.draw(frame)  # [QA-P0-3] overlay only after detection
             viz.fps(frame)
@@ -886,7 +1180,7 @@ if __name__=="__main__":
         db_cams = db_module.get_active_cameras(cam_id=target_cam)
         for i, c in enumerate(db_cams):
             if not c.get("path"):
-                print(f"⚠️  Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
+                print(f"[WARN] Camera {c.get('code')} has no RTSP URL or could not be decrypted — skipping")
                 continue
             sources.append({
                 "id": c.get("code") or f"cam_{i+1}",
@@ -917,11 +1211,11 @@ if __name__=="__main__":
     elif args.dir:
         p = Path(args.dir)
         if not p.exists():
-            print(f"❌ ไม่พบโฟลเดอร์: {args.dir}")
+            print(f"[ERROR] Directory not found: {args.dir}")
             sys.exit(1)
         vids = sorted([f for f in p.iterdir() if f.suffix.lower() in [".mp4", ".avi", ".mkv", ".m4v", ".mov"]])
         if not vids:
-            print(f"⚠️ ไม่พบไฟล์วิดีโอในโฟลเดอร์: {args.dir}")
+            print(f"[WARN] No video files found in directory: {args.dir}")
             sys.exit(1)
         for i, v in enumerate(vids):
             sources.append({
@@ -938,10 +1232,10 @@ if __name__=="__main__":
             all_sources = yaml.safe_load((ROOT / "config/sources.yaml").read_text()).get("sources", [])
             sources = [s for s in all_sources if s.get("enabled", True)]
         except Exception as e:
-            print(f"⚠️ อ่าน config/sources.yaml ผิดพลาด: {e}")
+            print(f"[WARN] Failed to read config/sources.yaml: {e}")
     else:
-        print("❌ ไม่พบ config/sources.yaml และไม่มีการระบุ --source, --dir หรือ --from-db")
-        print("\nตัวอย่างการใช้งาน:")
+        print("[ERROR] config/sources.yaml not found and no --source, --dir, or --from-db provided")
+        print("\nUsage examples:")
         print("  python3 main.py --from-db")
         print("  python3 main.py --source 'rtsp://...'")
         print("  python3 main.py --source '/path/to/video.mp4'")
@@ -949,7 +1243,7 @@ if __name__=="__main__":
         sys.exit(1)
 
     if not sources:
-        print("⚠️ ไม่มี Source สำหรับประมวลผล — ออกจากการทำงาน")
+        print("[WARN] No active sources to process — exiting")
         sys.exit(0)
 
     print(f"\n{'='*60}")
@@ -957,7 +1251,7 @@ if __name__=="__main__":
     print(f"{'='*60}")
     print(f"Enabled: {len(sources)} sources")
     for s in sources:
-        print(f"  ✓ {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
+        print(f"  [OK] {s.get('id','?'):20} | {s.get('location','?'):15} | port {s.get('port',8081)}")
     print(f"{'='*60}\n")
     procs=[]
     for s in sources:
