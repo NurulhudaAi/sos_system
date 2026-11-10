@@ -155,7 +155,7 @@ def insert_incident(
         "event_uuid":         "uuid-v4",
         "detectionType":      "Fall | Inactivity | Gesture | ObjectMissing",
         "zone":               "Hallway-B2",
-        "state":              "Open | InReview | Escalated | Resolved | Closed | Archived | Unknown",
+        "state":              "Open | InReview | InProgress | Recovered | Resolved | Unknown | Closed | Archived",
         "severity":           "High | Medium | Low",
         "confidence":         0.95,
         "duplicateCount":     1,
@@ -390,8 +390,20 @@ def get_event_by_uuid(event_uuid: str) -> Optional[Dict]:
         return None
 
 
+VALID_STATES = (
+    "Open",
+    "InReview",
+    "InProgress",
+    "Recovered",
+    "Resolved",
+    "Unknown",
+    "Closed",
+    "Archived",
+)
+
+
 def acknowledge_event(event_id: str, notes: str = "") -> bool:
-    """Transition: state → InReview (PRD FR-NEW-002)"""
+    """Transition: state -> InReview (PRD FR-NEW-002)"""
     db = _get_db()
     try:
         result = db[INCIDENTS_COLLECTION].update_one(
@@ -409,6 +421,26 @@ def acknowledge_event(event_id: str, notes: str = "") -> bool:
         return False
 
 
+def set_incident_in_progress(event_uuid: str, notes: str = "") -> bool:
+    """Transition: state -> InProgress (replaces legacy Escalated state)"""
+    db = _get_db()
+    try:
+        update_doc: Dict[str, Any] = {
+            "state": "InProgress",
+            "updatedAt_sys": _utcnow(),
+        }
+        if notes:
+            update_doc["resolutionNotes"] = notes
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_doc},
+        )
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"set_incident_in_progress error for {event_uuid}: {e}")
+        return False
+
+
 def resolve_incident(
     event_uuid: str,
     resolved_by: str = "auto_recovery",
@@ -417,12 +449,14 @@ def resolve_incident(
     recovery_snapshot_url: Optional[str] = None,
     recovery_image_path: Optional[str] = None,
     extra_meta: Optional[Dict] = None,
+    target_state: Optional[str] = None,
 ) -> bool:
-    """Transition: state → Resolved (Action Plan for Post-Alert Recovery / Departure with Snapshot Proof)"""
+    """Transition: state -> Recovered (for auto_recovery) or Resolved (for operator resolution)"""
     db = _get_db()
     try:
+        final_state = target_state or ("Recovered" if resolved_by == "auto_recovery" else "Resolved")
         update_doc: Dict[str, Any] = {
-            "state": "Resolved",
+            "state": final_state,
             "resolvedBy": resolved_by,
             "resolvedAt": _utcnow(),
             "resolutionNotes": notes,
@@ -448,7 +482,7 @@ def resolve_incident(
             {"event_uuid": event_uuid},
             {"$set": update_doc}
         )
-        logger.info(f"Incident {event_uuid} resolved ({resolved_by}): {notes}")
+        logger.info(f"Incident {event_uuid} -> {final_state} ({resolved_by}): {notes}")
         return result.modified_count > 0
     except Exception as e:
         logger.error(f"resolve_incident error for {event_uuid}: {e}")
@@ -553,18 +587,29 @@ def events_summary() -> Dict:
             {"$sort": {"_id": 1}}
         ]
         type_counts = {r["_id"]: r["count"] for r in db[INCIDENTS_COLLECTION].aggregate(pipeline)}
-        open_count    = db[INCIDENTS_COLLECTION].count_documents({"state": "Open"})
-        unknown_count = db[INCIDENTS_COLLECTION].count_documents({"state": "Unknown"})
-        obj_count     = db.object_events.count_documents({})
+        open_count        = db[INCIDENTS_COLLECTION].count_documents({"state": "Open"})
+        in_progress_count = db[INCIDENTS_COLLECTION].count_documents({"state": "InProgress"})
+        recovered_count   = db[INCIDENTS_COLLECTION].count_documents({"state": "Recovered"})
+        unknown_count     = db[INCIDENTS_COLLECTION].count_documents({"state": "Unknown"})
+        obj_count         = db.object_events.count_documents({})
         return {
-            "by_type":            type_counts,
-            "open_incidents":     open_count,
-            "unknown_incidents":  unknown_count,
-            "objects_unattended": obj_count,
+            "by_type":               type_counts,
+            "open_incidents":        open_count,
+            "in_progress_incidents": in_progress_count,
+            "recovered_incidents":   recovered_count,
+            "unknown_incidents":     unknown_count,
+            "objects_unattended":    obj_count,
         }
     except Exception as e:
         logger.error(f"events_summary error: {e}")
-        return {"by_type": {}, "open_incidents": 0, "unknown_incidents": 0, "objects_unattended": 0}
+        return {
+            "by_type": {},
+            "open_incidents": 0,
+            "in_progress_incidents": 0,
+            "recovered_incidents": 0,
+            "unknown_incidents": 0,
+            "objects_unattended": 0,
+        }
 
 
 # ─── Camera Zones Management ──────────────────────────────────────────────────
