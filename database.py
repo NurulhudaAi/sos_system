@@ -155,7 +155,7 @@ def insert_incident(
         "event_uuid":         "uuid-v4",
         "detectionType":      "Fall | Inactivity | Gesture | ObjectMissing",
         "zone":               "Hallway-B2",
-        "state":              "Open | InReview | Escalated | Resolved | Closed | Archived",
+        "state":              "Open | InReview | Escalated | Resolved | Closed | Archived | Unknown",
         "severity":           "High | Medium | Low",
         "confidence":         0.95,
         "duplicateCount":     1,
@@ -455,6 +455,52 @@ def resolve_incident(
         return False
 
 
+def mark_incident_unknown(
+    event_uuid: str,
+    reason: str = "UNKNOWN_SUBJECT_LOST",
+    notes: str = "",
+    last_seen_snapshot_url: Optional[str] = None,
+    last_seen_image_path: Optional[str] = None,
+    extra_meta: Optional[Dict] = None,
+) -> bool:
+    """Transition: state -> Unknown when subject disappears without confirmed recovery or stream degrades."""
+    db = _get_db()
+    try:
+        update_doc: Dict[str, Any] = {
+            "state": "Unknown",
+            "post_event_status": reason,
+            "metadata.post_event_status": reason,
+            "resolutionNotes": notes,
+            "updatedAt_sys": _utcnow(),
+        }
+        if last_seen_snapshot_url:
+            raw_last_b64 = (
+                last_seen_snapshot_url.split(",", 1)[1]
+                if "," in str(last_seen_snapshot_url)
+                else str(last_seen_snapshot_url)
+            )
+            update_doc["lastSeenSnapshotUrl"] = last_seen_snapshot_url
+            update_doc["last_seen_snapshot_base64"] = raw_last_b64
+            update_doc["metadata.lastSeenSnapshotUrl"] = last_seen_snapshot_url
+            update_doc["metadata.last_seen_snapshot_base64"] = raw_last_b64
+        if last_seen_image_path:
+            update_doc["lastSeenImagePath"] = str(last_seen_image_path)
+            update_doc["metadata.lastSeenImagePath"] = str(last_seen_image_path)
+        if extra_meta:
+            for k, v in extra_meta.items():
+                update_doc[f"metadata.{k}"] = _bson_safe(v)
+
+        result = db[INCIDENTS_COLLECTION].update_one(
+            {"event_uuid": event_uuid},
+            {"$set": update_doc},
+        )
+        logger.warning(f"Incident {event_uuid} marked Unknown ({reason}): {notes}")
+        return result.modified_count > 0
+    except Exception as e:
+        logger.error(f"mark_incident_unknown error for {event_uuid}: {e}")
+        return False
+
+
 def update_incident_notes(event_uuid: str, notes: str, extra_meta: Optional[Dict] = None) -> bool:
     """Append or update incident notes / metadata (e.g. subject left frame)"""
     db = _get_db()
@@ -483,7 +529,7 @@ def recent_events(limit: int = 50, unacked_only: bool = False, hours: int = 24) 
     try:
         query: Dict[str, Any] = {"createdAt": {"$gte": _utcnow() - timedelta(hours=hours)}}
         if unacked_only:
-            query["state"] = "Open"
+            query["state"] = {"$in": ["Open", "Unknown"]}
         docs = list(
             db[INCIDENTS_COLLECTION]
             .find(query)
@@ -507,16 +553,18 @@ def events_summary() -> Dict:
             {"$sort": {"_id": 1}}
         ]
         type_counts = {r["_id"]: r["count"] for r in db[INCIDENTS_COLLECTION].aggregate(pipeline)}
-        open_count  = db[INCIDENTS_COLLECTION].count_documents({"state": "Open"})
-        obj_count   = db.object_events.count_documents({})
+        open_count    = db[INCIDENTS_COLLECTION].count_documents({"state": "Open"})
+        unknown_count = db[INCIDENTS_COLLECTION].count_documents({"state": "Unknown"})
+        obj_count     = db.object_events.count_documents({})
         return {
             "by_type":            type_counts,
             "open_incidents":     open_count,
+            "unknown_incidents":  unknown_count,
             "objects_unattended": obj_count,
         }
     except Exception as e:
         logger.error(f"events_summary error: {e}")
-        return {"by_type": {}, "open_incidents": 0, "objects_unattended": 0}
+        return {"by_type": {}, "open_incidents": 0, "unknown_incidents": 0, "objects_unattended": 0}
 
 
 # ─── Camera Zones Management ──────────────────────────────────────────────────

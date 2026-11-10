@@ -30,6 +30,7 @@ fall:
   confirm_seconds: 4.0
   recover_seconds: 5.0
   dispatch_delay_seconds: 10.0
+  unknown_grace_seconds: 12.0
   cooldown_seconds: 60
   critical_seconds: 30.0
   danger_lying_seconds: 15.0

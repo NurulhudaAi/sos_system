@@ -304,8 +304,10 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
     FALL_CONFIRM_S = cfg.get("fall", {}).get("confirm_seconds", 4.0)
     FALL_COOLDOWN_S = float(cfg.get("fall", {}).get("cooldown_seconds", 60))
     FALL_DISPATCH_DELAY = float(cfg.get("fall", {}).get("dispatch_delay_seconds", 10.0))
+    UNKNOWN_GRACE_S = float(cfg.get("fall", {}).get("unknown_grace_seconds", 12.0))
     fall_first_down_ts = {}
     active_fall_alerts = {}
+    lost_fall_alerts: list[dict] = []
     fall_stand_count = {}
     FALL_DEBUG_CSV = os.getenv("FALL_DEBUG_CSV", "").lower() in ("1", "true", "yes")
     _clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -324,6 +326,19 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 if not ret:
                     retry_count += 1
                     print(f" [{source_id[-30:]}] No frame for 5s (stall {retry_count}/{max_retries}) — reader is reconnecting")
+                    if retry_count >= 2 and db_module:
+                        for _af in list(active_fall_alerts.values()) + lost_fall_alerts:
+                            if not _af.get("recovered") and not _af.get("unknown_marked") and _af.get("uuid"):
+                                _af["unknown_marked"] = True
+                                try:
+                                    db_module.mark_incident_unknown(
+                                        _af["uuid"],
+                                        reason="UNKNOWN_SIGNAL_LOST",
+                                        notes=f"Camera stream interrupted or signal degraded during active fall incident (stall={retry_count*5}s)",
+                                    )
+                                    print(f"  [UNKNOWN] Incident {_af['uuid'][:8]} marked Unknown (UNKNOWN_SIGNAL_LOST)")
+                                except Exception as _e:
+                                    print(f"[DB] mark_incident_unknown error: {_e}")
                     if vlc_mgr and not vlc_mgr.is_alive():
                         print(" [VLC] Process died — restarting ...")
                         try:
@@ -478,20 +493,24 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                 for tid in dropped:
                     fall_d.cleanup_track(tid)  # [FIX] previously missing — stale fall
                     head_d.cleanup_track(tid)
-                    # Post-alert departure check (Action Plan)
+                    # Post-alert departure / lost subject check (Action Plan)
                     if tid in active_fall_alerts:
-                        af = active_fall_alerts[tid]
+                        af = active_fall_alerts.pop(tid)
                         if af.get("recovered") and db_module and af.get("uuid"):
                             try:
                                 db_module.update_incident_notes(
                                     af["uuid"],
-                                    notes=f"Subject recovered and safely departed the scene at t={now_t:.1f}s",
+                                    notes=f"Subject recovered and safely departed the scene at t={frame_ts:.1f}s",
                                     extra_meta={"post_event_status": "RECOVERED_AND_DEPARTED"}
                                 )
                                 print(f"  [ACTION] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
                             except Exception:
                                 pass
-                        active_fall_alerts.pop(tid, None)
+                        elif not af.get("recovered") and not af.get("unknown_marked") and af.get("uuid"):
+                            af["lost_ts"] = frame_ts
+                            af["old_tid"] = tid
+                            lost_fall_alerts.append(af)
+                            print(f"  [WARN] tid={tid} lost while fallen at t={frame_ts:.1f}s — holding in re-link buffer (uuid={af['uuid'][:8]})")
                     fall_first_down_ts.pop(tid, None)
                     fall_stand_count.pop(tid, None)
                     for d in [hand_states, hand_miss, hand_ev, fall_ev, hand_bc, hand_bf,
@@ -563,9 +582,26 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                         dt = max(1e-3, now_t - prev_c_info[2])
                         vel_px_s = (((cx - prev_c_info[0])**2 + (cy - prev_c_info[1])**2)**0.5) / dt
 
+                    # Spatial Re-Link: if camera stuttered/occluded and subject reappeared with new tid
+                    if tid not in active_fall_alerts and lost_fall_alerts:
+                        for idx_laf, laf in enumerate(lost_fall_alerts):
+                            dist_laf = ((cx - laf.get("last_cx", -1.0))**2 + (cy - laf.get("last_cy", -1.0))**2) ** 0.5
+                            if dist_laf <= 0.18:
+                                active_fall_alerts[tid] = laf
+                                fall_ev[tid] = True
+                                _fall_last_event_ts[tid] = now_t
+                                lost_fall_alerts.pop(idx_laf)
+                                print(f"  [RE-LINK] Re-linked lost fall incident {laf['uuid'][:8]} from tid={laf.get('old_tid')} -> tid={tid} (dist={dist_laf:.3f})")
+                                break
+
                     # Post-Alert Recovery & Stood-Up Tracking (Action Plan)
                     if tid in active_fall_alerts:
                         af = active_fall_alerts[tid]
+                        af["last_bbox"] = bbox
+                        af["last_cx"] = cx
+                        af["last_cy"] = cy
+                        af["last_seen_ts"] = now_t
+                        af["last_frame"] = clean_frame.copy()
                         is_standing_now = (not fr.get("is_down") and not fr.get("is_fallen") and (float(fr.get("spine_angle", 0) or 0) >= 50.0 or fr.get("is_sitting") or fr.get("is_crouching")))
                         if is_standing_now:
                             fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
@@ -1015,7 +1051,16 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                                         print(f"[Webhook] fall help request error: {e}")
                                 _fall_last_event_ts[tid] = now_t
                                 fall_ev[tid] = True
-                                active_fall_alerts[tid] = {"uuid": ev_uuid, "alert_ts": now_t, "recovered": False}
+                                active_fall_alerts[tid] = {
+                                    "uuid": ev_uuid,
+                                    "alert_ts": now_t,
+                                    "recovered": False,
+                                    "last_bbox": bbox,
+                                    "last_cx": cx,
+                                    "last_cy": cy,
+                                    "last_seen_ts": now_t,
+                                    "last_frame": clean_frame.copy(),
+                                }
                     else:
                         # Recovery suppression within window (requires >=2 consecutive frames of upright standing or sitting)
                         is_recovery_stand = bool(
@@ -1028,12 +1073,57 @@ def main(src:str, port:int=8081, location:str="", cam_id:str="", use_vlc:bool=Fa
                             fall_stand_count[tid] = rec_c
                             if rec_c >= 2 or fr.get("is_seated_resting"):
                                 if tid in fall_first_down_ts and (now_t - fall_first_down_ts[tid]) < FALL_DISPATCH_DELAY:
-                                    print(f"  ℹ️ [{now_t:.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
+                                    print(f"  [INFO] [{now_t:.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
                                 fall_first_down_ts.pop(tid, None)
                         if fall_ev.get(tid) and not fr.get("is_fallen"):
                             fall_ev[tid]=False;fall_bc[tid]=0;fall_bf[tid]=None;fall_bt[tid]=None
                         if fr.get("is_seated_resting"):
                             fall_first_down_ts.pop(tid, None)
+
+            # Check lost fall alerts that exceeded UNKNOWN_GRACE_S without re-linking
+            if lost_fall_alerts:
+                still_lost = []
+                for laf in lost_fall_alerts:
+                    if (frame_ts - laf.get("lost_ts", frame_ts)) >= UNKNOWN_GRACE_S:
+                        if not laf.get("unknown_marked"):
+                            laf["unknown_marked"] = True
+                            last_b64, last_file = "", None
+                            if laf.get("last_frame") is not None:
+                                last_b64, last_file = save_annotated_snapshot(
+                                    laf["last_frame"],
+                                    event_type="unknown",
+                                    bbox=laf.get("last_bbox"),
+                                    label=f"UNKNOWN [tid={laf.get('old_tid')}] Subject Lost @ {laf.get('last_seen_ts', frame_ts):.1f}s",
+                                    color=(0, 165, 255),
+                                    coord_size=(w, h),
+                                    snapshot_dir=snapshot_dir,
+                                    save_local=save_local_snapshots,
+                                    extra_meta={
+                                        "source_id": source_id,
+                                        "track_id": laf.get("old_tid"),
+                                        "event_uuid": laf.get("uuid"),
+                                        "status": "UNKNOWN_SUBJECT_LOST",
+                                    },
+                                    all_tracks=None,
+                                )
+                            if db_module and laf.get("uuid"):
+                                try:
+                                    db_module.mark_incident_unknown(
+                                        laf["uuid"],
+                                        reason="UNKNOWN_SUBJECT_LOST",
+                                        notes=(
+                                            f"Subject (tid={laf.get('old_tid')}) disappeared from camera view or was occluded "
+                                            f"at t={laf.get('last_seen_ts', frame_ts):.1f}s without confirmed standing recovery."
+                                        ),
+                                        last_seen_snapshot_url=last_b64,
+                                        last_seen_image_path=last_file,
+                                    )
+                                    print(f"  [UNKNOWN] Incident {laf['uuid'][:8]} marked Unknown (UNKNOWN_SUBJECT_LOST)")
+                                except Exception as e:
+                                    print(f"[DB] mark_incident_unknown error: {e}")
+                    else:
+                        still_lost.append(laf)
+                lost_fall_alerts = still_lost
 
             zones.draw(frame)  # [QA-P0-3] overlay only after detection
             viz.fps(frame)

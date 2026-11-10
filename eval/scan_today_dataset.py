@@ -252,9 +252,11 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
     pose_cooldown = float(pose_cfg.get("cooldown_seconds", 30))  # 30s cooldown for gesture
     fall_cooldown = float(fall_cfg.get("cooldown_seconds", 60))  # 60s cooldown for fall
     fall_dispatch_delay = float(fall_cfg.get("dispatch_delay_seconds", 10.0))  # 10s total elapsed time to send incident
+    unknown_grace_s = float(fall_cfg.get("unknown_grace_seconds", 12.0))
 
     fall_first_down_ts = {}
     active_fall_alerts = {}
+    lost_fall_alerts = []
     fall_stand_count = {}
 
     events = []
@@ -321,9 +323,9 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
         for tid in dropped:
             fall_d.cleanup_track(tid)
             head_d.cleanup_track(tid)
-            # Post-alert departure check (Action Plan)
+            # Post-alert departure / lost subject check (Action Plan)
             if tid in active_fall_alerts:
-                af = active_fall_alerts[tid]
+                af = active_fall_alerts.pop(tid)
                 if af.get("recovered") and send_db and af.get("uuid"):
                     try:
                         from database import update_incident_notes
@@ -335,7 +337,11 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         print(f"  [ACTION] tid={tid} safely left camera view after recovery (uuid={af['uuid'][:8]})")
                     except Exception:
                         pass
-                active_fall_alerts.pop(tid, None)
+                elif not af.get("recovered") and not af.get("unknown_marked"):
+                    af["lost_ts"] = frame_ts
+                    af["old_tid"] = tid
+                    lost_fall_alerts.append(af)
+                    print(f"  [WARN] tid={tid} lost while fallen at t={frame_ts:.1f}s — holding in re-link buffer")
             fall_first_down_ts.pop(tid, None)
             fall_stand_count.pop(tid, None)
             for d in [hand_states, hand_miss, hand_consec3, _hand_last_ts, _pose_last_ts, hand_step_time, hand_first_seen]:
@@ -371,9 +377,26 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
             is_confirmed = (fr.get("is_fallen") or fr.get("danger_lying")) and not fr.get("recovered_quickly") and scene_verified
             is_down = fr.get("is_down", False)
 
+            # Spatial Re-Link: if camera stuttered/occluded and subject reappeared with new tid
+            if tid not in active_fall_alerts and lost_fall_alerts:
+                for idx_laf, laf in enumerate(lost_fall_alerts):
+                    dist_laf = ((cx - laf.get("last_cx", -1.0))**2 + (cy - laf.get("last_cy", -1.0))**2) ** 0.5
+                    if dist_laf <= 0.18:
+                        active_fall_alerts[tid] = laf
+                        fall_ev[tid] = True
+                        _fall_last_ts[tid] = frame_ts
+                        lost_fall_alerts.pop(idx_laf)
+                        print(f"  [RE-LINK] Re-linked lost fall incident from tid={laf.get('old_tid')} -> tid={tid} (dist={dist_laf:.3f})")
+                        break
+
             # Post-Alert Recovery & Stood-Up Tracking (Action Plan)
             if tid in active_fall_alerts:
                 af = active_fall_alerts[tid]
+                af["last_bbox"] = bbox
+                af["last_cx"] = cx
+                af["last_cy"] = cy
+                af["last_seen_ts"] = frame_ts
+                af["last_frame"] = clean_frame.copy()
                 is_standing_now = (not is_down and not fr.get("is_fallen") and fr.get("spine_angle", 0) >= 65.0)
                 if is_standing_now:
                     fall_stand_count[tid] = fall_stand_count.get(tid, 0) + 1
@@ -448,7 +471,16 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         ev_uuid = ""
                         if send_db:
                             ev_uuid = _dispatch_to_db("Fall", lbl, event_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
-                        active_fall_alerts[tid] = {"uuid": ev_uuid, "alert_ts": frame_ts, "recovered": False}
+                        active_fall_alerts[tid] = {
+                            "uuid": ev_uuid,
+                            "alert_ts": frame_ts,
+                            "recovered": False,
+                            "last_bbox": bbox,
+                            "last_cx": cx,
+                            "last_cy": cy,
+                            "last_seen_ts": frame_ts,
+                            "last_frame": clean_frame.copy(),
+                        }
             else:
                 # If person recovered during 5s recovery window (requires >=2 consecutive frames of upright standing or sitting)
                 is_recovery_stand = bool(
@@ -461,7 +493,7 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                     fall_stand_count[tid] = rec_c
                     if rec_c >= 2 or fr.get("is_seated_resting"):
                         if tid in fall_first_down_ts and (frame_ts - fall_first_down_ts[tid]) < fall_dispatch_delay:
-                            print(f"  ℹ️ [{frame_ts:6.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
+                            print(f"  [INFO] [{frame_ts:6.1f}s] Fall recovery detected within window (tid={tid}) — Alert suppressed.")
                         fall_first_down_ts.pop(tid, None)
                 if fr.get("is_sitting") or not fr.get("is_fallen"):
                     fall_ev[tid] = False
@@ -599,6 +631,46 @@ def scan_single_video(video_path: Path, out_dir: Path, skip_frames: int = 1, sen
                         print(f"  [GESTURE] [{frame_ts:6.1f}s] {lbl} -> {snap_name} (Event Conf: {ev_conf:.2f}, Person Conf: {conf:.2f})")
                         if send_db:
                             _dispatch_to_db("Gesture", lbl, ev_conf, tid, bbox, snap_path, video_path, frame_ts, ev_item["details"], person_conf=conf)
+
+        if lost_fall_alerts:
+            still_lost = []
+            for laf in lost_fall_alerts:
+                if (frame_ts - laf.get("lost_ts", frame_ts)) >= unknown_grace_s:
+                    if not laf.get("unknown_marked"):
+                        laf["unknown_marked"] = True
+                        unk_snap_name = f"unknown_tid{laf.get('old_tid')}_{int(laf.get('last_seen_ts', frame_ts))}s.jpg"
+                        unk_snap_path = snap_dir / unk_snap_name
+                        unk_lbl = f"UNKNOWN [tid={laf.get('old_tid')}] Subject Lost @ {laf.get('last_seen_ts', frame_ts):.1f}s"
+                        if laf.get("last_frame") is not None and laf.get("last_bbox") is not None:
+                            fake_assigned = [{"track_id": laf.get("old_tid"), "bbox": laf.get("last_bbox")}]
+                            save_snapshot_all_persons(unk_snap_path, laf["last_frame"], fake_assigned, laf.get("old_tid"), unk_lbl, (0, 165, 255))
+
+                        unk_b64_url = ""
+                        if unk_snap_path.exists():
+                            img = cv2.imread(str(unk_snap_path))
+                            if img is not None:
+                                _, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                                unk_b64_url = f"data:image/jpeg;base64,{base64.b64encode(buf.tobytes()).decode('utf-8')}"
+
+                        if send_db and laf.get("uuid"):
+                            try:
+                                from database import mark_incident_unknown
+                                mark_incident_unknown(
+                                    laf["uuid"],
+                                    reason="UNKNOWN_SUBJECT_LOST",
+                                    notes=(
+                                        f"Subject (tid={laf.get('old_tid')}) disappeared from camera view or was occluded "
+                                        f"at t={laf.get('last_seen_ts', frame_ts):.1f}s without confirmed standing recovery."
+                                    ),
+                                    last_seen_snapshot_url=unk_b64_url,
+                                    last_seen_image_path=str(unk_snap_path),
+                                )
+                                print(f"    [UNKNOWN] Incident {laf['uuid'][:8]} marked Unknown (UNKNOWN_SUBJECT_LOST) -> {unk_snap_name}")
+                            except Exception as e:
+                                print(f"    [WARN] [DB UNKNOWN ERROR] {e}")
+                else:
+                    still_lost.append(laf)
+            lost_fall_alerts = still_lost
 
         if frame_idx % 100 == 0:
             elapsed = time.time() - t_start
