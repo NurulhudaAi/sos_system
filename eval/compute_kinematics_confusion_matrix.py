@@ -168,7 +168,7 @@ def evaluate_summary(summary_path: str):
 
 def print_metrics(results, detailed_matches):
     print("=" * 78)
-    print(" 📊 KINEMATICS BENCHMARK & CONFUSION MATRIX REPORT (7 VIDEOS)")
+    print(" [REPORT] KINEMATICS BENCHMARK & CONFUSION MATRIX REPORT (7 VIDEOS)")
     print("=" * 78)
     
     for cat in ["Fall", "Gesture"]:
@@ -179,26 +179,26 @@ def print_metrics(results, detailed_matches):
         spec = tn / (tn + fp) if (tn + fp) > 0 else 1.0
         f1 = 2 * (prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
 
-        print(f"\n🏷️  Detection Class: [{cat}]")
+        print(f"\n[CLASS] Detection Class: [{cat}]")
         print("+" + "-"*35 + "+" + "-"*35 + "+")
         print(f"|  True Positive (TP):  {tp:<12} |  False Positive (FP): {fp:<12} |")
         print(f"|  False Negative (FN): {fn:<12} |  True Negative (TN):  {tn:<12} |")
         print("+" + "-"*35 + "+" + "-"*35 + "+")
-        print(f"  • Precision (ความแม่นยำ):       {prec * 100:.1f}%")
-        print(f"  • Recall (ความไวตรวจจับจริง):   {rec * 100:.1f}%")
-        print(f"  • Specificity (การคัดกรองท่าปกติ): {spec * 100:.1f}%")
-        print(f"  • F1-Score:                     {f1:.3f}")
+        print(f"  - Precision:   {prec * 100:.1f}%")
+        print(f"  - Recall:      {rec * 100:.1f}%")
+        print(f"  - Specificity: {spec * 100:.1f}%")
+        print(f"  - F1-Score:    {f1:.3f}")
 
     print("\n" + "=" * 78)
-    print(" 🔍 DETAILED CHRONOLOGY AUDIT")
+    print(" [AUDIT] DETAILED CHRONOLOGY AUDIT")
     print("=" * 78)
     for d in detailed_matches:
-        icon = "✅" if d["status"] == "TP" else ("❌" if d["status"] == "FP" else "⚠️")
-        print(f"{icon} [{d['status']}] {d['video']:<18} | t={d['time']:.1f}s | {d['type']:<7} | {d['desc']}")
+        tag = "[OK]" if d["status"] == "TP" else ("[ERR]" if d["status"] == "FP" else "[WARN]")
+        print(f"{tag} [{d['status']}] {d['video']:<18} | t={d['time']:.1f}s | {d['type']:<7} | {d['desc']}")
 
 if __name__ == "__main__":
     import sys
-    path = sys.argv[1] if len(sys.argv) > 1 else "eval/scan_zero_config_kinematics/scan_summary.json"
+    path = sys.argv[1] if len(sys.argv) > 1 else "eval/scan_after_tuning/scan_summary.json"
     res = evaluate_summary(path)
     if res:
         print_metrics(*res)
